@@ -170,7 +170,8 @@ def write_staging(df: DataFrame, project: str, dataset: str, temp_bucket: str) -
         .option("partitionField", "pickup_date")
         .option("partitionType", "DAY")
         .option("clusteredFields", "pickup_hour,pickup_location_id")
-        .option("writeMethod", "direct")
+        .option("writeMethod", "indirect")                    # ← changed: indirect respects partition config reliably
+        .option("createDisposition", "CREATE_IF_NEEDED")      # ← added: explicit table creation flag
         .option("temporaryGcsBucket", temp_bucket)
         .mode("overwrite")
         .save()
