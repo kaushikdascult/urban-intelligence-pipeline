@@ -30,3 +30,9 @@ Thumbs.db
 
 # Logs
 *.log
+
+# dbt
+dbt/urban_pipeline_dbt/target/
+dbt/urban_pipeline_dbt/dbt_packages/
+dbt/urban_pipeline_dbt/logs/
+**/.user.yml
