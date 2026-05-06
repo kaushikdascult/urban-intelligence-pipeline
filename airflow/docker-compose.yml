@@ -1,0 +1,69 @@
+x-airflow-common: &airflow-common
+  image: apache/airflow:2.10.3-python3.11
+  environment:
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CORE__FERNET_KEY: ''
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
+    GOOGLE_APPLICATION_CREDENTIALS: /home/airflow/.config/gcloud/application_default_credentials.json
+    CLOUDSDK_CORE_PROJECT: urban-pipeline-kd-2026
+    GCP_PROJECT_ID: urban-pipeline-kd-2026
+    GCS_RAW_BUCKET: urban-pipeline-kd-2026-raw
+    GCS_SCRIPTS_BUCKET: urban-pipeline-kd-2026-scripts
+    GCS_STAGING_BUCKET: urban-pipeline-kd-2026-staging
+    RAW_BUCKET: urban-pipeline-kd-2026-raw
+    RAW_DATASET: raw
+    _PIP_ADDITIONAL_REQUIREMENTS: dbt-bigquery==1.8.3
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./logs:/opt/airflow/logs
+    - ./plugins:/opt/airflow/plugins
+    - ../ingestion:/opt/airflow/ingestion
+    - ../transform:/opt/airflow/transform
+    - ../dbt:/opt/airflow/dbt
+    - /c/Users/kaush/AppData/Roaming/gcloud:/home/airflow/.config/gcloud:ro
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-db-volume:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 5
+
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate
+        airflow users create -r Admin -u admin -p admin -e admin@example.com -f Admin -l User
+    restart: on-failure
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    restart: always
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "8080:8080"
+    restart: always
+
+volumes:
+  postgres-db-volume:

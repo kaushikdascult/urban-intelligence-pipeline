@@ -1,0 +1,10 @@
+urban_pipeline_dbt:
+  target: dev
+  outputs:
+    dev:
+      type: bigquery
+      method: oauth
+      project: urban-pipeline-kd-2026
+      dataset: marts
+      threads: 4
+      location: US

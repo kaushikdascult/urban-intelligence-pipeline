@@ -36,3 +36,7 @@ dbt/urban_pipeline_dbt/target/
 dbt/urban_pipeline_dbt/dbt_packages/
 dbt/urban_pipeline_dbt/logs/
 **/.user.yml
+# Airflow secrets and runtime files
+airflow/keys/
+airflow/logs/
+airflow/plugins/__pycache__/
