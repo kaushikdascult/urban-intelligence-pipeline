@@ -1,0 +1,37 @@
+version: 2
+
+models:
+  - name: dim_dates
+    description: "Date dimension covering 2022-01-01 to 2022-12-31. Used for time-based analysis joins."
+    columns:
+      - name: date_day
+        tests:
+          - unique
+          - not_null
+
+  - name: dim_locations
+    description: "Taxi pickup/dropoff zone dimension with volume tiering."
+    columns:
+      - name: location_id
+        tests:
+          - unique
+          - not_null
+
+  - name: fct_trips
+    description: "Fact table — one row per taxi trip enriched with weather and dimension keys. Partitioned by pickup_date, clustered by pickup_hour and pickup_location_id."
+    columns:
+      - name: trip_id
+        description: "Surrogate primary key. MD5 hash of pickup/dropoff timestamps, locations, fare, tip, distance."
+        tests:
+          - unique
+          - not_null
+      - name: pickup_date
+        description: "Partition key. Date of pickup."
+        tests:
+          - not_null
+      - name: fare_amount
+        description: "Fare in USD, exclusive of tip and tolls."
+        tests:
+          - not_null
+        - name: weather_severity
+        description: "Categorical weather state at pickup hour: clear, freezing, light_rain, heavy_rain, blizzard."

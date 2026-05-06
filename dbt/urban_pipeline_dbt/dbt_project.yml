@@ -1,0 +1,34 @@
+name: 'urban_pipeline_dbt'
+version: '1.0.0'
+config-version: 2
+
+profile: 'urban_pipeline_dbt'
+
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+models:
+  urban_pipeline_dbt:
+    staging:
+      +materialized: view
+      +schema: staging         # keep this one — staging is different from your target
+    marts:
+      +materialized: table
+      # +schema: marts 
+      # The pickup_date error is coming from the partition_by config in dbt_project.yml being applied to dim_dates. 
+      # dbt is trying to partition dim_dates on pickup_date, but that column doesn't exist in dim_dates (it has date_day). 
+      # Fix 1: Move partition config to fct_trips only. partitioning and clustering commented out                        
+      #+partition_by:
+        #field: pickup_date
+        #data_type: date
+        #granularity: day
+      #+cluster_by: ['pickup_hour', 'pickup_location_id']

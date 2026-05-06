@@ -1,0 +1,16 @@
+version: 2
+
+sources:
+  - name: staging
+    project: urban-pipeline-kd-2026
+    dataset: staging
+    tables:
+      - name: taxi_trips_enriched
+        description: "PySpark output: taxi joined with weather"
+        columns:
+          - name: pickup_datetime
+            tests: [not_null]
+          - name: fare_amount
+            tests: [not_null]
+          - name: pickup_date
+            tests: [not_null]
