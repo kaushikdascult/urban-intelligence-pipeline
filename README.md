@@ -1,3 +1,5 @@
+# ![Pipeline](docs/airflow_pipeline.png)
+
 # Urban Intelligence Pipeline
 
 End-to-end batch data pipeline on Google Cloud Platform: NYC taxi trip data joined with hourly weather data, processed through bronze → silver → gold layers, orchestrated by Airflow.
