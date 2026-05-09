@@ -1,44 +1,46 @@
 # Urban Intelligence Pipeline
 
-End-to-end batch data pipeline on Google Cloud Platform: NYC taxi trip data joined with hourly weather data, processed through bronze→silver→gold layers, orchestrated by Airflow.
+End-to-end batch data pipeline on Google Cloud Platform: NYC taxi trip data joined with hourly weather data, processed through bronze → silver → gold layers, orchestrated by Airflow.
 
 ## Architecture
 
+~~~
 NYC Taxi (BQ public)        Open-Meteo API
-│                          │
-├── Python ingestion ──────┤
-│                          │
-▼                          ▼
-GCS raw bucket (parquet + JSON, partitioned by ingestion_date)
-│                          │
-└────────┬─────────────────┘
-▼
-BigQuery raw dataset
-(raw.taxi_trips, raw.weather_hourly)
-│
-▼
-Dataproc Serverless (PySpark)
-- Joins taxi + weather on pickup hour
-- Derives weather_severity, tip_pct
-- Writes partitioned + clustered output
-│
-▼
-BigQuery staging.taxi_trips_enriched
-│
-▼
-dbt models (BigQuery)
-- stg_trips (view)
-- dim_dates, dim_locations
-- fct_trips (partitioned + clustered fact)
-│
-▼
-Analysis-ready marts
+       │                          │
+       └────── Python ingestion ──┘
+                      │
+                      ▼
+       GCS raw bucket (parquet + JSON)
+       partitioned by ingestion_date
+                      │
+                      ▼
+       BigQuery raw dataset
+       (raw.taxi_trips, raw.weather_hourly)
+                      │
+                      ▼
+       Dataproc Serverless (PySpark)
+       - Joins taxi + weather on pickup hour
+       - Derives weather_severity, tip_pct
+       - Partitioned + clustered output
+                      │
+                      ▼
+       BigQuery staging.taxi_trips_enriched
+                      │
+                      ▼
+       dbt models (BigQuery)
+       - stg_trips (view)
+       - dim_dates, dim_locations
+       - fct_trips (partitioned + clustered fact)
+                      │
+                      ▼
+       Analysis-ready marts
+~~~
 
 Orchestrated end-to-end by an **Airflow DAG** (Docker locally; Composer-ready for cloud).
 
 ## Stack
 
-- **Cloud**: Google Cloud Platform (free trial)
+- **Cloud**: Google Cloud Platform (free trial, ~$1.50 spent)
 - **IaC**: Terraform 1.5+ (24 resources, GCS-backed remote state)
 - **Storage**: Google Cloud Storage, BigQuery
 - **Compute**: Dataproc Serverless (PySpark 3.5)
@@ -48,8 +50,9 @@ Orchestrated end-to-end by an **Airflow DAG** (Docker locally; Composer-ready fo
 
 ## Project structure
 
+~~~
 urban-pipeline/
-├── terraform/                    # IaC (24 resources: APIs, GCS, BQ, IAM)
+├── terraform/                    # IaC: 24 resources (APIs, GCS, BQ, IAM)
 ├── ingestion/batch/              # Python: extract → GCS → BQ raw
 │   ├── taxi_ingestion.py         # 500K rows from NYC TLC public dataset
 │   ├── weather_ingestion.py      # 744 hours from Open-Meteo
@@ -59,22 +62,23 @@ urban-pipeline/
 ├── dbt/urban_pipeline_dbt/
 │   ├── models/staging/           # Surrogate keys, type safety
 │   ├── models/marts/             # Star schema (dim + fact)
-│   ├── tests/                    # Custom singular tests (positive_fares, no_future_trips)
-│   └── analyses/                 # Monitoring SQL (freshness, weather impact)
+│   ├── tests/                    # Custom singular tests
+│   └── analyses/                 # Monitoring SQL
 ├── airflow/
 │   ├── docker-compose.yml        # Postgres + scheduler + webserver
 │   └── dags/urban_pipeline_dag.py
-├── tests/                        # pytest smoke tests
+├── tests/                        # pytest smoke tests (11 tests)
 └── README.md
+~~~
 
 ## Data layers
 
-| Layer | Location | Format | Volume |
-|-------|----------|--------|--------|
-| Raw | `gs://urban-pipeline-kd-2026-raw/taxi/ingestion_date=YYYY-MM-DD/` | Parquet + JSON | 485K trips + 744 weather hours |
-| Bronze | BigQuery `raw.*` | Native BQ | Same as above |
-| Silver | BigQuery `staging.taxi_trips_enriched` | Partitioned by `pickup_date`, clustered by `pickup_hour, pickup_location_id` | 484K rows, 31 partitions |
-| Gold | BigQuery `marts.{dim_dates, dim_locations, fct_trips}` | Star schema | fct_trips: 484K rows, 18.5 MB physical |
+| Layer  | Location                                                         | Format                                                                                | Volume                          |
+|--------|------------------------------------------------------------------|---------------------------------------------------------------------------------------|---------------------------------|
+| Raw    | `gs://urban-pipeline-kd-2026-raw/taxi/ingestion_date=YYYY-MM-DD/` | Parquet + JSON                                                                        | 485K trips + 744 weather hours  |
+| Bronze | BigQuery `raw.*`                                                 | Native BQ                                                                             | Same as above                   |
+| Silver | BigQuery `staging.taxi_trips_enriched`                           | Partitioned by `pickup_date`, clustered by `pickup_hour, pickup_location_id`          | 484K rows, 31 partitions        |
+| Gold   | BigQuery `marts.{dim_dates, dim_locations, fct_trips}`           | Star schema                                                                           | fct_trips: 484K rows, 18.5 MB physical |
 
 ## Running locally
 
@@ -88,7 +92,7 @@ urban-pipeline/
 
 ### Setup
 
-```bash
+~~~bash
 # 1. Set up GCP project + remote state bucket
 gcloud projects create urban-pipeline-kd-2026
 gcloud storage buckets create gs://urban-pipeline-kd-2026-tf-state --location=US
@@ -125,43 +129,43 @@ echo "AIRFLOW_UID=50000" > .env
 docker compose up airflow-init
 docker compose up -d
 # Open http://localhost:8080, login admin/admin, trigger urban_pipeline DAG
-```
+~~~
 
 ## Tests
 
-```bash
+~~~bash
 # Python smoke tests
 pytest tests/ -v
 
-# dbt tests (4 generic + 3 custom singular)
+# dbt tests (11 generic + 3 custom singular)
 cd dbt/urban_pipeline_dbt && dbt test --profiles-dir ~/.dbt
-```
+~~~
 
 ## Cost
 
 Approximate cost for one full pipeline run:
 
-| Component | Cost |
-|-----------|------|
-| GCS storage (raw bucket, ~50 MB) | <$0.01 |
-| BigQuery storage (~120 MB physical) | <$0.01 |
-| BQ public-dataset query (500K rows scanned) | $0 (covered by user's free tier) |
-| Dataproc Serverless batch (2 min) | ~$0.10 |
-| dbt run on BQ (3 tables, 90 MB processed) | ~$0.01 |
-| **Total per run** | **~$0.12** |
+| Component                                  | Cost                              |
+|--------------------------------------------|-----------------------------------|
+| GCS storage (raw bucket, ~50 MB)           | <$0.01                            |
+| BigQuery storage (~120 MB physical)        | <$0.01                            |
+| BQ public-dataset query (500K rows scanned)| $0 (covered by user's free tier)  |
+| Dataproc Serverless batch (2 min)          | ~$0.10                            |
+| dbt run on BQ (3 tables, 90 MB processed)  | ~$0.01                            |
+| **Total per run**                          | **~$0.12**                        |
 
 ## Key engineering decisions
 
-- **Dataproc Serverless over cluster**: zero idle cost, scales to zero between runs
-- **Indirect write mode + `createDisposition=CREATE_IF_NEEDED`**: BQ Spark connector silently dropped partitioning config in direct mode
-- **OAuth/ADC over service account keys**: org policy `iam.disableServiceAccountKeyCreation` enforced; ADC volume-mounted into Airflow containers
-- **Hive-style date partitioning in raw bucket**: `taxi/ingestion_date=YYYY-MM-DD/` enables efficient time-range scans
-- **Surrogate keys via wide MD5**: `MD5(pickup_dt, dropoff_dt, pickup_loc, dropoff_loc, fare, tip, distance)` — narrower hashes produced ~36 collisions
-- **Cluster on `pickup_hour, pickup_location_id`**: matches the most common analytical query pattern (hourly breakdowns by zone)
+- **Dataproc Serverless over cluster**: zero idle cost, scales to zero between runs.
+- **Indirect write mode + `createDisposition=CREATE_IF_NEEDED`**: BQ Spark connector silently dropped partitioning config in direct mode.
+- **OAuth/ADC over service account keys**: org policy `iam.disableServiceAccountKeyCreation` enforced; ADC volume-mounted into Airflow containers.
+- **Hive-style date partitioning in raw bucket**: `taxi/ingestion_date=YYYY-MM-DD/` enables efficient time-range scans.
+- **Surrogate keys via wide MD5**: `MD5(pickup_dt, dropoff_dt, pickup_loc, dropoff_loc, fare, tip, distance)` — narrower hashes produced ~36 collisions.
+- **Cluster on `pickup_hour, pickup_location_id`**: matches the most common analytical query pattern (hourly breakdowns by zone).
 
 ## Sample analytical query
 
-```sql
+~~~sql
 -- Top 10 hours by trip volume during the January 2022 NYC blizzard
 select
     pickup_date,
@@ -173,7 +177,7 @@ where weather_severity = 'blizzard'
 group by 1, 2
 order by trips desc
 limit 10
-```
+~~~
 
 The pipeline correctly captured the January 7, 2022 NYC blizzard: snowfall of 1.05–1.33 cm/hr from 4–7 AM, with average fare jumping to $34.64 at 5 AM.
 
