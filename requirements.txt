@@ -7,3 +7,4 @@ db-dtypes==1.4.0
 google-cloud-bigquery-storage==2.27.0
 jupyter==1.1.1
 ipykernel==6.29.5dbt-bigquery==1.8.3
+pytest==8.3.4

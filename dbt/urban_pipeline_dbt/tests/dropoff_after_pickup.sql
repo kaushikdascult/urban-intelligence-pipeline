@@ -1,0 +1,8 @@
+-- Test: dropoff must occur after pickup, never before.
+
+select
+    trip_id,
+    pickup_datetime,
+    dropoff_datetime
+from {{ ref('fct_trips') }}
+where dropoff_datetime < pickup_datetime
