@@ -40,3 +40,7 @@ dbt/urban_pipeline_dbt/logs/
 airflow/keys/
 airflow/logs/
 airflow/plugins/__pycache__/
+
+# CI
+.pytest_cache/
+*.egg-info/
