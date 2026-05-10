@@ -12,18 +12,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
-
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-
       - name: Run pytest smoke tests
         run: pytest tests/ -v
 
@@ -32,19 +29,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
       - name: Install Airflow + Google provider
         run: |
           python -m pip install --upgrade pip
           pip install apache-airflow==2.10.3 \
-                      apache-airflow-providers-google==10.21.1 \
+                      apache-airflow-providers-google \
                       --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.10.3/constraints-3.11.txt"
-
       - name: Validate DAG can be parsed
         run: |
           export AIRFLOW__CORE__LOAD_EXAMPLES=False
@@ -62,15 +56,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
       - name: Install dbt-bigquery
         run: pip install dbt-bigquery==1.8.3
-
       - name: Create stub profiles.yml
         run: |
           mkdir -p ~/.dbt
@@ -86,29 +77,24 @@ jobs:
                 threads: 1
                 location: US
           EOF
-
       - name: dbt parse
         working-directory: dbt/urban_pipeline_dbt
         run: dbt parse
 
   code-quality:
-    name: Code quality (black + flake8)
+    name: Code quality
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
       - name: Install linters
         run: pip install black==24.10.0 flake8==7.1.1
-
       - name: Check black formatting
         run: black --check --diff ingestion/ transform/ tests/ airflow/dags/
         continue-on-error: true
-
       - name: Run flake8
         run: flake8 ingestion/ transform/ tests/ airflow/dags/ --max-line-length=120 --extend-ignore=E203,W503
         continue-on-error: true
