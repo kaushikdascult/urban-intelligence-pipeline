@@ -33,5 +33,5 @@ models:
         description: "Fare in USD, exclusive of tip and tolls."
         tests:
           - not_null
-        - name: weather_severity
+      - name: weather_severity
         description: "Categorical weather state at pickup hour: clear, freezing, light_rain, heavy_rain, blizzard."
