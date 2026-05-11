@@ -4,10 +4,11 @@ These tests verify module structure, constants, and configuration without
 hitting GCP. They run fast and catch the most common breakage:
 - Module imports fail (missing dependency, syntax error)
 - Constants get accidentally renamed or removed
-- Date format constants drift from expected ISO format
+
+CLI behavior (--ingestion-date validation, GCS path conventions) is
+covered by tests/test_ingestion_paths.py via subprocess invocation.
 """
 import re
-from datetime import datetime
 
 import pytest
 
@@ -25,7 +26,7 @@ class TestTaxiIngestion:
         from ingestion.batch import taxi_ingestion
         assert hasattr(taxi_ingestion, 'PROJECT_ID')
         assert hasattr(taxi_ingestion, 'RAW_BUCKET')
-        assert hasattr(taxi_ingestion, 'INGESTION_DATE')
+        assert hasattr(taxi_ingestion, 'PUBLIC_DATASET')
 
     def test_project_id_format(self):
         """PROJECT_ID matches GCP project naming rules."""
@@ -34,12 +35,11 @@ class TestTaxiIngestion:
         assert re.match(r'^[a-z][a-z0-9\-]{4,29}$', PROJECT_ID), \
             f"Invalid GCP project ID format: {PROJECT_ID}"
 
-    def test_ingestion_date_iso_format(self):
-        """INGESTION_DATE must be ISO date string (YYYY-MM-DD)."""
-        from ingestion.batch.taxi_ingestion import INGESTION_DATE
-        assert isinstance(INGESTION_DATE, str)
-        # Will raise ValueError if format is wrong
-        datetime.strptime(INGESTION_DATE, '%Y-%m-%d')
+    def test_parse_args_function_exists(self):
+        """Module must expose parse_args for CLI arg handling."""
+        from ingestion.batch import taxi_ingestion
+        assert hasattr(taxi_ingestion, 'parse_args')
+        assert callable(taxi_ingestion.parse_args)
 
 
 class TestWeatherIngestion:
