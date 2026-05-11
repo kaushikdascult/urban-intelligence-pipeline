@@ -1,13 +1,19 @@
 """
 Taxi data ingestion: BigQuery public dataset → GCS as Parquet.
 
-Pulls NYC Yellow Taxi trips from January 2022, applies basic cleaning,
-and lands them in the raw GCS bucket partitioned by ingestion date.
+Pulls NYC Yellow Taxi trips for a single ingestion date (default: today, UTC),
+applies basic cleaning, and lands them in the raw GCS bucket partitioned by
+ingestion date.
+
+Usage:
+    python taxi_ingestion.py                          # today (UTC)
+    python taxi_ingestion.py --ingestion-date 2022-01-15
 """
 
+import argparse
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -22,9 +28,6 @@ ROW_LIMIT = int(os.getenv("TAXI_ROW_LIMIT", "500000"))
 
 PUBLIC_DATASET = "bigquery-public-data.new_york_taxi_trips.tlc_yellow_trips_2022"
 
-INGESTION_DATE = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-GCS_OBJECT_NAME = f"taxi/ingestion_date={INGESTION_DATE}/taxi_trips.parquet"
-
 LOCAL_TEMP = Path("temp_taxi_trips.parquet")
 
 logging.basicConfig(
@@ -34,9 +37,25 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
-def query_taxi_data(client: bigquery.Client, limit: int) -> pd.DataFrame:
-    """Query BigQuery public taxi dataset and return as pandas DataFrame."""
-    log.info(f"Querying {PUBLIC_DATASET} for {limit:,} rows...")
+def parse_args() -> argparse.Namespace:
+    """Parse CLI args. --ingestion-date defaults to today (UTC)."""
+    parser = argparse.ArgumentParser(
+        description="Ingest one day of NYC taxi trips to GCS.",
+    )
+    parser.add_argument(
+        "--ingestion-date",
+        type=lambda s: datetime.strptime(s, "%Y-%m-%d").date(),
+        default=datetime.now(timezone.utc).date(),
+        help="ISO date (YYYY-MM-DD) to ingest. Defaults to today (UTC).",
+    )
+    return parser.parse_args()
+
+
+def query_taxi_data(
+    client: bigquery.Client, ingestion_date: date, limit: int
+) -> pd.DataFrame:
+    """Query BigQuery public taxi dataset for one day and return as DataFrame."""
+    log.info(f"Querying {PUBLIC_DATASET} for {ingestion_date} (limit {limit:,})...")
 
     sql = f"""
     SELECT
@@ -59,12 +78,16 @@ def query_taxi_data(client: bigquery.Client, limit: int) -> pd.DataFrame:
         pickup_location_id,
         dropoff_location_id
     FROM `{PUBLIC_DATASET}`
-    WHERE pickup_datetime >= '2022-01-01'
-      AND pickup_datetime <  '2022-02-01'
+    WHERE DATE(pickup_datetime) = @ingestion_date
     LIMIT {limit}
     """
 
-    df = client.query(sql).to_dataframe()
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("ingestion_date", "DATE", ingestion_date),
+        ]
+    )
+    df = client.query(sql, job_config=job_config).to_dataframe()
     log.info(f"Pulled {len(df):,} rows from BigQuery")
     return df
 
@@ -112,19 +135,25 @@ def upload_to_gcs(local_path: Path, bucket_name: str, object_name: str) -> str:
 
 
 def main():
+    args = parse_args()
+    ingestion_date = args.ingestion_date
+    gcs_object_name = (
+        f"taxi/ingestion_date={ingestion_date.isoformat()}/taxi_trips.parquet"
+    )
+
     log.info("=" * 60)
     log.info("Taxi ingestion starting")
     log.info(f"Project: {PROJECT_ID}")
     log.info(f"Target bucket: {RAW_BUCKET}")
-    log.info(f"Ingestion date: {INGESTION_DATE}")
+    log.info(f"Ingestion date: {ingestion_date.isoformat()}")
     log.info("=" * 60)
 
     bq_client = bigquery.Client(project=PROJECT_ID)
 
-    df = query_taxi_data(bq_client, ROW_LIMIT)
+    df = query_taxi_data(bq_client, ingestion_date, ROW_LIMIT)
     df = clean_taxi_data(df)
     write_parquet(df, LOCAL_TEMP)
-    gcs_uri = upload_to_gcs(LOCAL_TEMP, RAW_BUCKET, GCS_OBJECT_NAME)
+    gcs_uri = upload_to_gcs(LOCAL_TEMP, RAW_BUCKET, gcs_object_name)
 
     LOCAL_TEMP.unlink()
     log.info("Local temp file removed")
