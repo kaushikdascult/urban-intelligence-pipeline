@@ -71,9 +71,9 @@ def test_gcs_path_convention_in_source():
     Downstream Spark partition pruning depends on this exact layout.
     """
     source = TAXI_SCRIPT.read_text(encoding="utf-8")
-    assert "ingestion_date=" in source, (
-        "Hive-style 'ingestion_date=' prefix missing from taxi_ingestion.py"
-    )
-    assert "taxi_trips.parquet" in source, (
-        "Output filename 'taxi_trips.parquet' missing"
-    )
+    assert (
+        "ingestion_date=" in source
+    ), "Hive-style 'ingestion_date=' prefix missing from taxi_ingestion.py"
+    assert (
+        "taxi_trips.parquet" in source
+    ), "Output filename 'taxi_trips.parquet' missing"

@@ -13,7 +13,7 @@ import logging
 import sys
 
 from pyspark.sql import SparkSession, DataFrame, functions as F
-from pyspark.sql.types import TimestampType
+
 
 # -----------------------------------------------------------------------------
 # Logging setup — Cloud Logging picks this up automatically on Dataproc
@@ -30,10 +30,14 @@ log = logging.getLogger("urban-pipeline-transform")
 # CLI args
 # -----------------------------------------------------------------------------
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Transform raw taxi+weather into enriched staging table.")
+    parser = argparse.ArgumentParser(
+        description="Transform raw taxi+weather into enriched staging table."
+    )
     parser.add_argument("--project", required=True, help="GCP project ID")
     parser.add_argument("--raw-dataset", default="raw", help="Source BQ dataset")
-    parser.add_argument("--staging-dataset", default="staging", help="Target BQ dataset")
+    parser.add_argument(
+        "--staging-dataset", default="staging", help="Target BQ dataset"
+    )
     parser.add_argument(
         "--gcs-temp-bucket",
         required=True,
@@ -48,8 +52,7 @@ def parse_args() -> argparse.Namespace:
 def read_taxi(spark: SparkSession, project: str, dataset: str) -> DataFrame:
     log.info(f"Reading {project}.{dataset}.taxi_trips")
     df = (
-        spark.read
-        .format("bigquery")
+        spark.read.format("bigquery")
         .option("table", f"{project}.{dataset}.taxi_trips")
         .load()
     )
@@ -60,8 +63,7 @@ def read_taxi(spark: SparkSession, project: str, dataset: str) -> DataFrame:
 def read_weather(spark: SparkSession, project: str, dataset: str) -> DataFrame:
     log.info(f"Reading {project}.{dataset}.weather_hourly")
     df = (
-        spark.read
-        .format("bigquery")
+        spark.read.format("bigquery")
         .option("table", f"{project}.{dataset}.weather_hourly")
         .load()
     )
@@ -108,22 +110,22 @@ def join_and_enrich(taxi: DataFrame, weather: DataFrame) -> DataFrame:
 
     log.info("Deriving weather feature columns")
     enriched = (
-        joined
-        .withColumn("is_raining", F.col("rain") > 0)
+        joined.withColumn("is_raining", F.col("rain") > 0)
         .withColumn("is_snowing", F.col("snowfall") > 0)
         .withColumn(
             "weather_severity",
             F.when(F.col("snowfall") > 1.0, "blizzard")
-             .when(F.col("rain") > 5.0, "heavy_rain")
-             .when(F.col("rain") > 0, "light_rain")
-             .when(F.col("temperature_2m") < -5.0, "freezing")
-             .otherwise("clear"),
+            .when(F.col("rain") > 5.0, "heavy_rain")
+            .when(F.col("rain") > 0, "light_rain")
+            .when(F.col("temperature_2m") < -5.0, "freezing")
+            .otherwise("clear"),
         )
         .withColumn(
             "tip_pct",
-            F.when(F.col("fare_amount") > 0,
-                   F.round(F.col("tip_amount") / F.col("fare_amount") * 100, 2))
-             .otherwise(F.lit(None)),
+            F.when(
+                F.col("fare_amount") > 0,
+                F.round(F.col("tip_amount") / F.col("fare_amount") * 100, 2),
+            ).otherwise(F.lit(None)),
         )
     )
 
@@ -142,15 +144,15 @@ def validate(df: DataFrame) -> None:
         log.error("Empty result set — aborting before write")
         raise ValueError("Transformation produced 0 rows")
 
-    weather_join_rate = (
-        df.filter(F.col("temperature_2m").isNotNull()).count() / total
-    )
+    weather_join_rate = df.filter(F.col("temperature_2m").isNotNull()).count() / total
     log.info(f"Weather join rate: {weather_join_rate:.1%}")
 
     if weather_join_rate < 0.5:
-        log.warning(f"Low weather join rate ({weather_join_rate:.1%}). "
-                    "Most taxi rows did not match a weather hour. "
-                    "Check timezone alignment.")
+        log.warning(
+            f"Low weather join rate ({weather_join_rate:.1%}). "
+            "Most taxi rows did not match a weather hour. "
+            "Check timezone alignment."
+        )
 
     log.info("Sample row distribution by weather_severity:")
     df.groupBy("weather_severity").count().orderBy(F.desc("count")).show(truncate=False)
@@ -161,17 +163,22 @@ def validate(df: DataFrame) -> None:
 # -----------------------------------------------------------------------------
 def write_staging(df: DataFrame, project: str, dataset: str, temp_bucket: str) -> None:
     table = f"{project}.{dataset}.taxi_trips_enriched"
-    log.info(f"Writing to {table} (partition=pickup_date, cluster=pickup_hour,pickup_location_id)")
+    log.info(
+        f"Writing to {table} (partition=pickup_date, cluster=pickup_hour,pickup_location_id)"
+    )
 
     (
-        df.write
-        .format("bigquery")
+        df.write.format("bigquery")
         .option("table", table)
         .option("partitionField", "pickup_date")
         .option("partitionType", "DAY")
         .option("clusteredFields", "pickup_hour,pickup_location_id")
-        .option("writeMethod", "indirect")                    # ← changed: indirect respects partition config reliably
-        .option("createDisposition", "CREATE_IF_NEEDED")      # ← added: explicit table creation flag
+        .option(
+            "writeMethod", "indirect"
+        )  # ← changed: indirect respects partition config reliably
+        .option(
+            "createDisposition", "CREATE_IF_NEEDED"
+        )  # ← added: explicit table creation flag
         .option("temporaryGcsBucket", temp_bucket)
         .mode("overwrite")
         .save()
@@ -194,8 +201,7 @@ def main() -> None:
     log.info("=" * 60)
 
     spark = (
-        SparkSession.builder
-        .appName("urban-pipeline-transform")
+        SparkSession.builder.appName("urban-pipeline-transform")
         .config("spark.sql.session.timeZone", "UTC")
         .getOrCreate()
     )
@@ -207,7 +213,9 @@ def main() -> None:
 
         enriched = join_and_enrich(taxi, weather)
         validate(enriched)
-        write_staging(enriched, args.project, args.staging_dataset, args.gcs_temp_bucket)
+        write_staging(
+            enriched, args.project, args.staging_dataset, args.gcs_temp_bucket
+        )
 
         log.info("Done.")
     finally:

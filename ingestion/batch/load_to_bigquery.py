@@ -24,15 +24,21 @@ RAW_DATASET = os.getenv("RAW_DATASET", "raw")
 INGESTION_DATE = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 # Source GCS objects (created by taxi_ingestion.py and weather_ingestion.py)
-TAXI_GCS_URI = f"gs://{RAW_BUCKET}/taxi/ingestion_date={INGESTION_DATE}/taxi_trips.parquet"
-WEATHER_GCS_URI = f"gs://{RAW_BUCKET}/weather/ingestion_date={INGESTION_DATE}/weather_nyc.json"
+TAXI_GCS_URI = (
+    f"gs://{RAW_BUCKET}/taxi/ingestion_date={INGESTION_DATE}/taxi_trips.parquet"
+)
+WEATHER_GCS_URI = (
+    f"gs://{RAW_BUCKET}/weather/ingestion_date={INGESTION_DATE}/weather_nyc.json"
+)
 
 # Target tables
 TAXI_TABLE = f"{PROJECT_ID}.{RAW_DATASET}.taxi_trips"
 WEATHER_TABLE = f"{PROJECT_ID}.{RAW_DATASET}.weather_hourly"
 
 # Path inside the staging bucket for the reshaped weather NDJSON
-RESHAPED_WEATHER_OBJECT = f"weather/_reshaped/ingestion_date={INGESTION_DATE}/weather_hourly.ndjson"
+RESHAPED_WEATHER_OBJECT = (
+    f"weather/_reshaped/ingestion_date={INGESTION_DATE}/weather_hourly.ndjson"
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -161,7 +167,7 @@ def main():
 
     log.info("\n" + "=" * 60)
     log.info("Done.")
-    log.info(f"Tables created:")
+    log.info("Tables created:")
     log.info(f"  {TAXI_TABLE}")
     log.info(f"  {WEATHER_TABLE}")
     log.info("=" * 60)
