@@ -21,6 +21,7 @@ venv/
 # Secrets
 *.json
 !package.json
+!terraform/schemas/*.json 
 .env
 service-account-key.json
 

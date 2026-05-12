@@ -1,0 +1,18 @@
+[
+  {"name": "time", "type": "TIMESTAMP", "mode": "NULLABLE"},
+  {"name": "temperature_2m", "type": "FLOAT", "mode": "NULLABLE"},
+  {"name": "relative_humidity_2m", "type": "FLOAT", "mode": "NULLABLE"},
+  {"name": "precipitation", "type": "FLOAT", "mode": "NULLABLE"},
+  {"name": "rain", "type": "FLOAT", "mode": "NULLABLE"},
+  {"name": "snowfall", "type": "FLOAT", "mode": "NULLABLE"},
+  {"name": "wind_speed_10m", "type": "FLOAT", "mode": "NULLABLE"},
+  {"name": "wind_direction_10m", "type": "FLOAT", "mode": "NULLABLE"},
+  {"name": "weather_code", "type": "INTEGER", "mode": "NULLABLE"},
+  {"name": "surface_pressure", "type": "FLOAT", "mode": "NULLABLE"},
+  {"name": "cloud_cover", "type": "FLOAT", "mode": "NULLABLE"},
+  {"name": "city", "type": "STRING", "mode": "NULLABLE"},
+  {"name": "latitude", "type": "FLOAT", "mode": "NULLABLE"},
+  {"name": "longitude", "type": "FLOAT", "mode": "NULLABLE"},
+  {"name": "ingested_at_utc", "type": "TIMESTAMP", "mode": "NULLABLE"},
+  {"name": "weather_date", "type": "DATE", "mode": "REQUIRED"}
+]
