@@ -1,9 +1,13 @@
 """
 Load raw taxi (parquet) and weather (JSON) data from GCS into BigQuery.
 
-- Taxi: native parquet load, schema auto-detected.
+- Taxi: native parquet load, schema is Terraform-managed.
 - Weather: column-major JSON re-shaped into row-major NDJSON, then loaded.
-Both go into the `raw` dataset, one table per source.
+
+Idempotent: each day's load runs DELETE-then-APPEND scoped to the ingestion
+date, so re-running the same date replaces only that partition. New dates
+accumulate. Designed for the Day 8 backfill: 31 daily runs produce a
+complete monthly table.
 
 Accepts --ingestion-date for incremental runs. Defaults to today (UTC).
 
@@ -29,7 +33,7 @@ PROJECT_ID = os.getenv("GCP_PROJECT_ID", "urban-pipeline-kd-2026")
 RAW_BUCKET = os.getenv("RAW_BUCKET", "urban-pipeline-kd-2026-raw")
 RAW_DATASET = os.getenv("RAW_DATASET", "raw")
 
-# Target tables (date-independent)
+# Target tables (date-independent; Terraform-managed schemas)
 TAXI_TABLE = f"{PROJECT_ID}.{RAW_DATASET}.taxi_trips"
 WEATHER_TABLE = f"{PROJECT_ID}.{RAW_DATASET}.weather_hourly"
 
@@ -54,32 +58,56 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def delete_partition(
+    client: bigquery.Client, table: str, partition_column: str, ingestion_date: date
+) -> int:
+    """DELETE rows for the given date from a partitioned table.
+
+    Returns the number of rows deleted. Cheap because BQ prunes to the
+    single partition. No-op for empty partitions; required to make
+    same-day re-runs idempotent.
+    """
+    sql = f"DELETE FROM `{table}` WHERE {partition_column} = @ingestion_date"
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("ingestion_date", "DATE", ingestion_date),
+        ]
+    )
+    log.info(f"DELETE FROM {table} WHERE {partition_column} = '{ingestion_date}'")
+    job = client.query(sql, job_config=job_config)
+    job.result()
+    deleted = job.num_dml_affected_rows or 0
+    log.info(f"Deleted {deleted:,} pre-existing rows for {ingestion_date}")
+    return deleted
+
+
 # -----------------------------------------------------------------------------
 # Taxi loader (parquet → BigQuery)
 # -----------------------------------------------------------------------------
-def load_taxi_to_bigquery(client: bigquery.Client, taxi_gcs_uri: str) -> None:
-    """Load parquet from GCS into raw.taxi_trips. Replaces table if it exists.
+def load_taxi_to_bigquery(
+    client: bigquery.Client, taxi_gcs_uri: str, ingestion_date: date
+) -> None:
+    """DELETE the date's existing partition, then APPEND the parquet from GCS.
 
-    TODO(day-8): WRITE_TRUNCATE means a backfill run for day N wipes
-    day N-1's data. Day 8 will partition raw.taxi_trips and switch to
-    DELETE-then-APPEND semantics so backfill produces a complete table.
+    Schema is Terraform-managed (terraform/schemas/taxi_trips.json), so we
+    don't pass autodetect or an explicit schema — BQ validates the parquet
+    against the existing table schema and rejects on mismatch.
     """
+    delete_partition(client, TAXI_TABLE, "pickup_date", ingestion_date)
+
     log.info(f"Loading taxi parquet from {taxi_gcs_uri}")
     log.info(f"Target: {TAXI_TABLE}")
 
     job_config = bigquery.LoadJobConfig(
         source_format=bigquery.SourceFormat.PARQUET,
-        write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
-        autodetect=True,
+        write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
     )
 
     job = client.load_table_from_uri(taxi_gcs_uri, TAXI_TABLE, job_config=job_config)
-    log.info(f"BQ job started: {job.job_id}")
-    job.result()  # blocking wait
+    log.info(f"BQ load job: {job.job_id}")
+    job.result()
 
-    table = client.get_table(TAXI_TABLE)
-    log.info(f"Loaded {table.num_rows:,} rows into {TAXI_TABLE}")
-    log.info(f"Table size: {table.num_bytes / 1024 / 1024:.2f} MB")
+    log.info(f"Loaded {job.output_rows:,} rows for partition {ingestion_date}")
 
 
 # -----------------------------------------------------------------------------
@@ -131,12 +159,12 @@ def upload_ndjson_to_gcs(records: list[dict], bucket: str, object_name: str) -> 
 
 
 def load_weather_to_bigquery(
-    client: bigquery.Client, weather_gcs_uri: str, reshaped_weather_object: str
+    client: bigquery.Client,
+    weather_gcs_uri: str,
+    reshaped_weather_object: str,
+    ingestion_date: date,
 ) -> None:
-    """Pull raw JSON from GCS, reshape, write NDJSON back, load into BQ.
-
-    TODO(day-8): Same WRITE_TRUNCATE backfill issue as taxi.
-    """
+    """Pull raw JSON from GCS, reshape, write NDJSON back, DELETE+APPEND into BQ."""
     log.info(f"Reading raw weather JSON from {weather_gcs_uri}")
     storage_client = storage.Client(project=PROJECT_ID)
 
@@ -146,24 +174,22 @@ def load_weather_to_bigquery(
     raw_json = json.loads(raw_bytes.decode("utf-8"))
 
     rows = reshape_weather_to_ndjson(raw_json)
-
     ndjson_uri = upload_ndjson_to_gcs(rows, RAW_BUCKET, reshaped_weather_object)
     log.info(f"Reshaped NDJSON at {ndjson_uri}")
 
+    delete_partition(client, WEATHER_TABLE, "weather_date", ingestion_date)
+
     job_config = bigquery.LoadJobConfig(
         source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
-        write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
-        autodetect=True,
+        write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
     )
 
     log.info(f"Loading NDJSON into {WEATHER_TABLE}")
     job = client.load_table_from_uri(ndjson_uri, WEATHER_TABLE, job_config=job_config)
-    log.info(f"BQ job started: {job.job_id}")
+    log.info(f"BQ load job: {job.job_id}")
     job.result()
 
-    table = client.get_table(WEATHER_TABLE)
-    log.info(f"Loaded {table.num_rows:,} rows into {WEATHER_TABLE}")
-    log.info(f"Table size: {table.num_bytes / 1024:.2f} KB")
+    log.info(f"Loaded {job.output_rows} rows for partition {ingestion_date}")
 
 
 # -----------------------------------------------------------------------------
@@ -196,14 +222,16 @@ def main(ingestion_date: date | None = None):
     bq_client = bigquery.Client(project=PROJECT_ID)
 
     log.info("\n--- Taxi ---")
-    load_taxi_to_bigquery(bq_client, taxi_gcs_uri)
+    load_taxi_to_bigquery(bq_client, taxi_gcs_uri, ingestion_date)
 
     log.info("\n--- Weather ---")
-    load_weather_to_bigquery(bq_client, weather_gcs_uri, reshaped_weather_object)
+    load_weather_to_bigquery(
+        bq_client, weather_gcs_uri, reshaped_weather_object, ingestion_date
+    )
 
     log.info("\n" + "=" * 60)
     log.info("Done.")
-    log.info("Tables created:")
+    log.info(f"Tables updated for partition {iso}:")
     log.info(f"  {TAXI_TABLE}")
     log.info(f"  {WEATHER_TABLE}")
     log.info("=" * 60)
