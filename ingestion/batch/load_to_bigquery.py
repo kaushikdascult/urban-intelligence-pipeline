@@ -101,6 +101,9 @@ def reshape_weather_to_ndjson(raw_json: dict) -> list[dict]:
         row["latitude"] = metadata["latitude"]
         row["longitude"] = metadata["longitude"]
         row["ingested_at_utc"] = metadata["ingested_at_utc"]
+        # Derive partition key from the hourly timestamp.
+        # Open-Meteo returns ISO 8601 strings like "2022-01-15T00:00".
+        row["weather_date"] = row["time"][:10]
         rows.append(row)
 
     log.info(f"Reshaped {n_rows} hourly records (columnar -> row-wise)")
