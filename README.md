@@ -119,10 +119,10 @@ urban-intelligence-pipeline/
 
 | Layer  | Location                                                              | Format                                                                                | Volume                          |
 |--------|-----------------------------------------------------------------------|---------------------------------------------------------------------------------------|---------------------------------|
-| Raw    | `gs://urban-pipeline-kd-2026-raw/taxi/ingestion_date=YYYY-MM-DD/`     | Parquet + JSON                                                                        | 485K trips + 744 weather hours  |
-| Bronze | BigQuery `raw.*`                                                      | Native BQ                                                                             | Same as above                   |
-| Silver | BigQuery `staging.taxi_trips_enriched`                                | Partitioned by `pickup_date`, clustered by `pickup_hour, pickup_location_id`          | 484K rows, 31 partitions        |
-| Gold   | BigQuery `marts.{dim_dates, dim_locations, fct_trips}`                | Star schema                                                                           | fct_trips: 484K rows, 18.5 MB physical |
+| Raw | `gs://urban-pipeline-kd-2026-raw/{taxi,weather}/ingestion_date=YYYY-MM-DD/` | Parquet + JSON | 31 daily partitions: ~2.4M trips + 744 weather hours total |
+| Bronze | BigQuery `raw.*` | Native BQ | Currently 1 day until Day 8 fixes WRITE_TRUNCATE; will be ~2.4M trips |
+| Silver | BigQuery `staging.taxi_trips_enriched` | Partitioned by `pickup_date`, clustered by `pickup_hour, pickup_location_id` | To be regenerated in Day 8 |
+| Gold | BigQuery `marts.{dim_dates, dim_locations, fct_trips}` | Star schema | To be regenerated in Day 8 |                                                                         | fct_trips: 484K rows, 18.5 MB physical |
 
 ## Build log — 6 days
 
@@ -179,31 +179,31 @@ CI runs both on every push to `main`.
 
 Approximate cost for one full pipeline run on GCP:
 
-| Component                                  | Cost                              |
-|--------------------------------------------|-----------------------------------|
-| GCS storage (raw bucket, ~50 MB)           | <$0.01                            |
-| BigQuery storage (~120 MB physical)        | <$0.01                            |
-| BQ public-dataset query (500K rows scanned)| $0 (free-tier)                    |
-| Dataproc Serverless batch (~2 min)         | ~$0.10                            |
-| dbt run on BQ (3 tables, 90 MB processed)  | ~$0.01                            |
-| **Total per run**                          | **~$0.12**                        |
+| Component | Cost |
+| --- | --- |
+| GCS storage (raw bucket, ~50 MB across 31 partitions) | <$0.01 |
+| BigQuery storage (post-Day 8: ~500 MB physical) | <$0.01 |
+| BQ public-dataset queries (31 × ~30 MB partition scan) | $0 (covered by user's free tier) |
+| Dataproc Serverless batch (one run per backfill) | ~$0.10 |
+| dbt run on BQ (post-Day 8: incremental fct_trips) | ~$0.01 |
+| **Total for full January 2022 backfill** | **~$0.12** |
 
-Total project spend so far: **~$1.50** of $300 trial.
+Per-day incremental runs (Day 8+) will be substantially cheaper since dbt processes only new partitions.
+
 
 ## Sample analytical query
 
-~~~sql
--- Top 10 hours by trip volume during the January 2022 NYC blizzard
-select
-    pickup_date,
-    pickup_hour,
-    count(*) as trips,
-    round(avg(fare_amount), 2) as avg_fare
-from `urban-pipeline-kd-2026.marts.fct_trips`
-where weather_severity = 'blizzard'
-group by 1, 2
-order by trips desc
-limit 10
+    -- Trips per day across January 2022 — captures the Jan 28-29 Nor'easter
+    select
+        pickup_date,
+        count(*) as trips,
+        round(avg(fare_amount), 2) as avg_fare
+    from `urban-pipeline-kd-2026.marts.fct_trips`
+    where pickup_date between '2022-01-01' and '2022-01-31'
+    group by 1
+    order by 1
+
+The January 28-29 Nor'easter is visible in the data: Friday Jan 28 had 95,873 trips (a normal weekday volume), Saturday Jan 29 collapsed to 34,388 trips (less than half the surrounding Saturdays), and Sunday Jan 30 partially recovered to 71,229 as the city dug out. To be re-verified end-to-end once Day 8 fixes the WRITE_TRUNCATE issue and rebuilds `fct_trips` from the full backfill.
 ~~~
 
 ## Running locally
@@ -255,7 +255,25 @@ echo "AIRFLOW_UID=50000" > .env
 docker compose up airflow-init
 docker compose up -d
 # Open http://localhost:8080, login admin/admin, trigger urban_pipeline DAG
-~~~
+
+
+### Backfill historical dates
+
+The DAG ingests for one day at a time using Airflow's `{{ ds }}` macro (logical date / data_interval_start). For one-off historical loads — for example, populating January 2022 to demo the pipeline — use the standalone backfill script:
+
+    # Populate 31 GCS partitions (~7 minutes, ~$0 marginal cost)
+    python scripts/backfill.py --start-date 2022-01-01 --end-date 2022-01-31
+
+    # Resume after a failure — skips dates whose GCS partition already exists
+    python scripts/backfill.py --start-date 2022-01-01 --end-date 2022-01-31 --skip-if-exists
+
+    ~~~
+
+The script only writes to GCS. To materialize a single day into BigQuery for inspection:
+
+    python ingestion/batch/load_to_bigquery.py --ingestion-date 2022-01-31
+
+`load_to_bigquery.py` currently uses `WRITE_TRUNCATE`, so each invocation replaces the BigQuery table with that one day's data. Day 8 will partition the raw tables and switch to DELETE-then-APPEND so the full month materializes.
 
 ## Architecture Decision Record
 
