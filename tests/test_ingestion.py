@@ -68,6 +68,13 @@ class TestWeatherIngestion:
         assert "open-meteo.com" in API_URL
         assert API_URL.startswith("https://")
 
+    def test_parse_args_function_exists(self):
+        """Module must expose parse_args for CLI arg handling."""
+        from ingestion.batch import weather_ingestion
+
+        assert hasattr(weather_ingestion, "parse_args")
+        assert callable(weather_ingestion.parse_args)
+
 
 class TestLoadToBigQuery:
     """Tests for ingestion.batch.load_to_bigquery module."""
@@ -83,6 +90,13 @@ class TestLoadToBigQuery:
         assert hasattr(load_to_bigquery, "PROJECT_ID")
         assert hasattr(load_to_bigquery, "RAW_DATASET")
         assert hasattr(load_to_bigquery, "RAW_BUCKET")
+
+    def test_parse_args_function_exists(self):
+        """Module must expose parse_args for CLI arg handling."""
+        from ingestion.batch import load_to_bigquery
+
+        assert hasattr(load_to_bigquery, "parse_args")
+        assert callable(load_to_bigquery.parse_args)
 
 
 class TestSparkTransform:

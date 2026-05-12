@@ -28,21 +28,27 @@ default_args = {
 
 
 def run_taxi_ingestion(**context):
+    from datetime import date
+
     from ingestion.batch.taxi_ingestion import main
 
-    main()
+    main(ingestion_date=date.fromisoformat(context["ds"]))
 
 
 def run_weather_ingestion(**context):
+    from datetime import date
+
     from ingestion.batch.weather_ingestion import main
 
-    main()
+    main(ingestion_date=date.fromisoformat(context["ds"]))
 
 
 def run_load_to_bq(**context):
+    from datetime import date
+
     from ingestion.batch.load_to_bigquery import main
 
-    main()
+    main(ingestion_date=date.fromisoformat(context["ds"]))
 
 
 with DAG(
@@ -69,6 +75,15 @@ with DAG(
         task_id="load_to_bq",
         python_callable=run_load_to_bq,
     )
+
+    # TODO(day-8): Spark + load_to_bigquery both currently use overwrite
+    # semantics (WRITE_TRUNCATE / mode("overwrite")), so during a backfill
+    # only the last day's data survives in raw.* and staging.*. Day 8 will
+    # refactor both to partition-aware DELETE-then-APPEND. For the 1.5
+    # backfill workaround: run Python ingestion (taxi, weather) for all
+    # 31 days first to populate GCS, then trigger load_to_bq + spark once
+    # at the end against the most recent day, or skip load_to_bq/spark
+    # in the backfill loop and run them manually as a final step.
 
     spark_transform = DataprocCreateBatchOperator(
         task_id="spark_transform",

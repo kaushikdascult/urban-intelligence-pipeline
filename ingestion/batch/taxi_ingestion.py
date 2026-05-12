@@ -93,7 +93,17 @@ def query_taxi_data(
 
 
 def clean_taxi_data(df: pd.DataFrame) -> pd.DataFrame:
-    """Basic cleaning: drop nulls, derive helper columns, filter anomalies."""
+    """Basic cleaning: drop nulls, derive helper columns, filter anomalies.
+
+    Returns the input unchanged if empty — BQ legitimately returns 0 rows
+    when the requested ingestion_date has no data (e.g. a future date,
+    or a gap in the source). The caller should treat that as a no-op
+    rather than a failure.
+    """
+    if df.empty:
+        log.warning("Received 0 rows — skipping cleaning (no data for this date)")
+        return df
+
     log.info("Cleaning data...")
 
     initial = len(df)
@@ -134,9 +144,16 @@ def upload_to_gcs(local_path: Path, bucket_name: str, object_name: str) -> str:
     return gcs_uri
 
 
-def main():
-    args = parse_args()
-    ingestion_date = args.ingestion_date
+def main(ingestion_date: date | None = None):
+    """Run ingestion for a given date.
+
+    When called from CLI, ingestion_date is None and we parse argv.
+    When called from Airflow, the caller passes ingestion_date directly.
+    """
+    if ingestion_date is None:
+        args = parse_args()
+        ingestion_date = args.ingestion_date
+
     gcs_object_name = (
         f"taxi/ingestion_date={ingestion_date.isoformat()}/taxi_trips.parquet"
     )
@@ -152,6 +169,15 @@ def main():
 
     df = query_taxi_data(bq_client, ingestion_date, ROW_LIMIT)
     df = clean_taxi_data(df)
+
+    if df.empty:
+        log.warning(
+            f"No data for {ingestion_date.isoformat()} — skipping GCS upload. "
+            "This is expected for future dates or genuine source gaps."
+        )
+        log.info("Done (no-op).")
+        return
+
     write_parquet(df, LOCAL_TEMP)
     gcs_uri = upload_to_gcs(LOCAL_TEMP, RAW_BUCKET, gcs_object_name)
 

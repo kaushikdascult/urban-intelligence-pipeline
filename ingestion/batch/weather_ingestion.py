@@ -130,9 +130,16 @@ def upload_to_gcs(local_path: Path, bucket_name: str, object_name: str) -> str:
     return gcs_uri
 
 
-def main():
-    args = parse_args()
-    ingestion_date = args.ingestion_date
+def main(ingestion_date: date | None = None):
+    """Run ingestion for a given date.
+
+    When called from CLI, ingestion_date is None and we parse argv.
+    When called from Airflow, the caller passes ingestion_date directly.
+    """
+    if ingestion_date is None:
+        args = parse_args()
+        ingestion_date = args.ingestion_date
+
     gcs_object_name = (
         f"weather/ingestion_date={ingestion_date.isoformat()}/weather_nyc.json"
     )

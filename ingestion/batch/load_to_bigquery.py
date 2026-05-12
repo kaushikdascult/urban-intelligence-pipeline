@@ -4,13 +4,20 @@ Load raw taxi (parquet) and weather (JSON) data from GCS into BigQuery.
 - Taxi: native parquet load, schema auto-detected.
 - Weather: column-major JSON re-shaped into row-major NDJSON, then loaded.
 Both go into the `raw` dataset, one table per source.
+
+Accepts --ingestion-date for incremental runs. Defaults to today (UTC).
+
+Usage:
+    python load_to_bigquery.py                          # today (UTC)
+    python load_to_bigquery.py --ingestion-date 2022-01-15
 """
 
+import argparse
 import json
 import logging
 import os
 import tempfile
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from google.cloud import bigquery, storage
@@ -21,24 +28,10 @@ from google.cloud import bigquery, storage
 PROJECT_ID = os.getenv("GCP_PROJECT_ID", "urban-pipeline-kd-2026")
 RAW_BUCKET = os.getenv("RAW_BUCKET", "urban-pipeline-kd-2026-raw")
 RAW_DATASET = os.getenv("RAW_DATASET", "raw")
-INGESTION_DATE = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-# Source GCS objects (created by taxi_ingestion.py and weather_ingestion.py)
-TAXI_GCS_URI = (
-    f"gs://{RAW_BUCKET}/taxi/ingestion_date={INGESTION_DATE}/taxi_trips.parquet"
-)
-WEATHER_GCS_URI = (
-    f"gs://{RAW_BUCKET}/weather/ingestion_date={INGESTION_DATE}/weather_nyc.json"
-)
-
-# Target tables
+# Target tables (date-independent)
 TAXI_TABLE = f"{PROJECT_ID}.{RAW_DATASET}.taxi_trips"
 WEATHER_TABLE = f"{PROJECT_ID}.{RAW_DATASET}.weather_hourly"
-
-# Path inside the staging bucket for the reshaped weather NDJSON
-RESHAPED_WEATHER_OBJECT = (
-    f"weather/_reshaped/ingestion_date={INGESTION_DATE}/weather_hourly.ndjson"
-)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -47,12 +40,31 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
+def parse_args() -> argparse.Namespace:
+    """Parse CLI args. --ingestion-date defaults to today (UTC)."""
+    parser = argparse.ArgumentParser(
+        description="Load one day of raw taxi+weather data from GCS into BigQuery.",
+    )
+    parser.add_argument(
+        "--ingestion-date",
+        type=lambda s: datetime.strptime(s, "%Y-%m-%d").date(),
+        default=datetime.now(timezone.utc).date(),
+        help="ISO date (YYYY-MM-DD) to load. Defaults to today (UTC).",
+    )
+    return parser.parse_args()
+
+
 # -----------------------------------------------------------------------------
 # Taxi loader (parquet → BigQuery)
 # -----------------------------------------------------------------------------
-def load_taxi_to_bigquery(client: bigquery.Client) -> None:
-    """Load parquet from GCS into raw.taxi_trips. Replaces table if it exists."""
-    log.info(f"Loading taxi parquet from {TAXI_GCS_URI}")
+def load_taxi_to_bigquery(client: bigquery.Client, taxi_gcs_uri: str) -> None:
+    """Load parquet from GCS into raw.taxi_trips. Replaces table if it exists.
+
+    TODO(day-8): WRITE_TRUNCATE means a backfill run for day N wipes
+    day N-1's data. Day 8 will partition raw.taxi_trips and switch to
+    DELETE-then-APPEND semantics so backfill produces a complete table.
+    """
+    log.info(f"Loading taxi parquet from {taxi_gcs_uri}")
     log.info(f"Target: {TAXI_TABLE}")
 
     job_config = bigquery.LoadJobConfig(
@@ -61,7 +73,7 @@ def load_taxi_to_bigquery(client: bigquery.Client) -> None:
         autodetect=True,
     )
 
-    job = client.load_table_from_uri(TAXI_GCS_URI, TAXI_TABLE, job_config=job_config)
+    job = client.load_table_from_uri(taxi_gcs_uri, TAXI_TABLE, job_config=job_config)
     log.info(f"BQ job started: {job.job_id}")
     job.result()  # blocking wait
 
@@ -115,19 +127,24 @@ def upload_ndjson_to_gcs(records: list[dict], bucket: str, object_name: str) -> 
     return f"gs://{bucket}/{object_name}"
 
 
-def load_weather_to_bigquery(client: bigquery.Client) -> None:
-    """Pull raw JSON from GCS, reshape, write NDJSON back, load into BQ."""
-    log.info(f"Reading raw weather JSON from {WEATHER_GCS_URI}")
+def load_weather_to_bigquery(
+    client: bigquery.Client, weather_gcs_uri: str, reshaped_weather_object: str
+) -> None:
+    """Pull raw JSON from GCS, reshape, write NDJSON back, load into BQ.
+
+    TODO(day-8): Same WRITE_TRUNCATE backfill issue as taxi.
+    """
+    log.info(f"Reading raw weather JSON from {weather_gcs_uri}")
     storage_client = storage.Client(project=PROJECT_ID)
 
-    bucket_name = WEATHER_GCS_URI.split("/")[2]
-    object_name = "/".join(WEATHER_GCS_URI.split("/")[3:])
+    bucket_name = weather_gcs_uri.split("/")[2]
+    object_name = "/".join(weather_gcs_uri.split("/")[3:])
     raw_bytes = storage_client.bucket(bucket_name).blob(object_name).download_as_bytes()
     raw_json = json.loads(raw_bytes.decode("utf-8"))
 
     rows = reshape_weather_to_ndjson(raw_json)
 
-    ndjson_uri = upload_ndjson_to_gcs(rows, RAW_BUCKET, RESHAPED_WEATHER_OBJECT)
+    ndjson_uri = upload_ndjson_to_gcs(rows, RAW_BUCKET, reshaped_weather_object)
     log.info(f"Reshaped NDJSON at {ndjson_uri}")
 
     job_config = bigquery.LoadJobConfig(
@@ -149,21 +166,37 @@ def load_weather_to_bigquery(client: bigquery.Client) -> None:
 # -----------------------------------------------------------------------------
 # Main
 # -----------------------------------------------------------------------------
-def main():
+def main(ingestion_date: date | None = None):
+    """Load taxi + weather raw data for the given date into BigQuery.
+
+    When called from CLI, ingestion_date is None and we parse argv.
+    When called from Airflow, the caller passes ingestion_date directly.
+    """
+    if ingestion_date is None:
+        args = parse_args()
+        ingestion_date = args.ingestion_date
+
+    iso = ingestion_date.isoformat()
+    taxi_gcs_uri = f"gs://{RAW_BUCKET}/taxi/ingestion_date={iso}/taxi_trips.parquet"
+    weather_gcs_uri = f"gs://{RAW_BUCKET}/weather/ingestion_date={iso}/weather_nyc.json"
+    reshaped_weather_object = (
+        f"weather/_reshaped/ingestion_date={iso}/weather_hourly.ndjson"
+    )
+
     log.info("=" * 60)
     log.info("Loading raw data into BigQuery")
     log.info(f"Project: {PROJECT_ID}")
     log.info(f"Dataset: {RAW_DATASET}")
-    log.info(f"Ingestion date: {INGESTION_DATE}")
+    log.info(f"Ingestion date: {iso}")
     log.info("=" * 60)
 
     bq_client = bigquery.Client(project=PROJECT_ID)
 
     log.info("\n--- Taxi ---")
-    load_taxi_to_bigquery(bq_client)
+    load_taxi_to_bigquery(bq_client, taxi_gcs_uri)
 
     log.info("\n--- Weather ---")
-    load_weather_to_bigquery(bq_client)
+    load_weather_to_bigquery(bq_client, weather_gcs_uri, reshaped_weather_object)
 
     log.info("\n" + "=" * 60)
     log.info("Done.")
