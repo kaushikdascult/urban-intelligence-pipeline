@@ -1,188 +1,151 @@
 """
-Backfill GCS partitions for a date range.
+Backfill historical date ranges through the ingestion + load pipeline.
 
-Loops over [start_date, end_date] inclusive and runs taxi + weather
-ingestion for each day. Does NOT run load_to_bigquery or spark_transform
-— those use WRITE_TRUNCATE / overwrite semantics and will be fixed
-in Day 8. For now, run them manually once at the end against the
-last date if you want BQ populated.
+Replaces the ad-hoc shell loops used during initial backfill with a
+single resumable script. Operational design:
 
-Idempotent: re-running overwrites the same GCS objects with identical
-content. Resumable via --start-date / --end-date. Optional
---skip-if-exists checks GCS before each day and skips already-populated
-partitions.
+  - Idempotent: re-running a date overwrites GCS files and DELETE-APPENDs
+    the BQ partition. Safe to interrupt and restart.
+  - Resumable: --start-date / --end-date define an inclusive range.
+  - Skip-existing: --skip-if-exists checks GCS before each ingest step.
+  - Fail-fast: any subprocess failure stops the loop with a non-zero
+    exit code (unlike the shell `for` loop, which swallowed 30 schema
+    errors during the Jan 2022 backfill).
+  - Throttled: --sleep between iterations to respect Open-Meteo's free
+    tier.
 
 Usage:
     python scripts/backfill.py --start-date 2022-01-01 --end-date 2022-01-31
-    python scripts/backfill.py --start-date 2022-01-15 --end-date 2022-01-31 --skip-if-exists
+    python scripts/backfill.py --start-date 2022-01-01 --end-date 2022-01-31 \\
+        --skip-if-exists --sleep 1.0
+    python scripts/backfill.py --start-date 2022-01-01 --end-date 2022-01-07 \\
+        --skip-load   # ingest GCS only, skip BQ load (e.g. for cost control)
 """
 
 import argparse
 import logging
 import os
+import subprocess
 import sys
 import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-# Make ingestion modules importable when run from repo root
-REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT))
+from google.cloud import storage
 
-from google.cloud import storage  # noqa: E402
-
-from ingestion.batch.taxi_ingestion import main as taxi_main  # noqa: E402
-from ingestion.batch.weather_ingestion import main as weather_main  # noqa: E402
-
-RAW_BUCKET = os.getenv("RAW_BUCKET", "urban-pipeline-kd-2026-raw")
 PROJECT_ID = os.getenv("GCP_PROJECT_ID", "urban-pipeline-kd-2026")
+RAW_BUCKET = os.getenv("RAW_BUCKET", "urban-pipeline-kd-2026-raw")
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# Open-Meteo asks for courteous use of their free archive API.
-# 2s is well below any rate limit but keeps us polite.
-WEATHER_SLEEP_SECONDS = 2.0
+TAXI_SCRIPT = REPO_ROOT / "ingestion" / "batch" / "taxi_ingestion.py"
+WEATHER_SCRIPT = REPO_ROOT / "ingestion" / "batch" / "weather_ingestion.py"
+LOAD_SCRIPT = REPO_ROOT / "ingestion" / "batch" / "load_to_bigquery.py"
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
-log = logging.getLogger("backfill")
+log = logging.getLogger(__name__)
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Backfill GCS partitions for a date range (taxi + weather only).",
-    )
-    parser.add_argument(
-        "--start-date",
-        type=lambda s: datetime.strptime(s, "%Y-%m-%d").date(),
-        required=True,
-        help="First date to backfill (inclusive, ISO format)",
-    )
-    parser.add_argument(
-        "--end-date",
-        type=lambda s: datetime.strptime(s, "%Y-%m-%d").date(),
-        required=True,
-        help="Last date to backfill (inclusive, ISO format)",
-    )
-    parser.add_argument(
+    p = argparse.ArgumentParser(description=__doc__)
+    iso = lambda s: datetime.strptime(s, "%Y-%m-%d").date()
+    p.add_argument("--start-date", type=iso, required=True)
+    p.add_argument("--end-date", type=iso, required=True)
+    p.add_argument(
         "--skip-if-exists",
         action="store_true",
-        help="Skip dates whose GCS partition already has both taxi and weather files",
+        help="Skip ingest for dates whose GCS partition already exists.",
     )
-    args = parser.parse_args()
-
-    if args.end_date < args.start_date:
-        parser.error(
-            f"--end-date {args.end_date} is before --start-date {args.start_date}"
-        )
-
-    return args
-
-
-def daterange(start: date, end: date):
-    """Yield each date in [start, end] inclusive."""
-    current = start
-    while current <= end:
-        yield current
-        current += timedelta(days=1)
+    p.add_argument(
+        "--skip-load",
+        action="store_true",
+        help="Run only the GCS ingestion steps; skip BigQuery load.",
+    )
+    p.add_argument(
+        "--sleep",
+        type=float,
+        default=0.5,
+        help="Seconds between iterations (Open-Meteo rate-limit hygiene).",
+    )
+    return p.parse_args()
 
 
-def gcs_partition_exists(
-    storage_client: storage.Client, ingestion_date: date
-) -> tuple[bool, bool]:
-    """Return (taxi_exists, weather_exists) for the given date's GCS partition."""
-    iso = ingestion_date.isoformat()
+def date_range(start: date, end: date):
+    cur = start
+    while cur <= end:
+        yield cur
+        cur += timedelta(days=1)
+
+
+def gcs_partition_exists(bucket: storage.Bucket, prefix: str) -> bool:
+    """True if at least one blob exists under the given prefix."""
+    return any(True for _ in bucket.list_blobs(prefix=prefix, max_results=1))
+
+
+def run_step(label: str, cmd: list[str]) -> None:
+    """Run a subprocess, stream output, raise on non-zero exit."""
+    log.info(f"  → {label}: {' '.join(cmd)}")
+    result = subprocess.run(cmd, cwd=REPO_ROOT)
+    if result.returncode != 0:
+        raise RuntimeError(f"{label} failed with exit code {result.returncode}")
+
+
+def main() -> int:
+    args = parse_args()
+    if args.start_date > args.end_date:
+        log.error("--start-date must be <= --end-date")
+        return 2
+
+    storage_client = storage.Client(project=PROJECT_ID)
     bucket = storage_client.bucket(RAW_BUCKET)
 
-    taxi_blob = bucket.blob(f"taxi/ingestion_date={iso}/taxi_trips.parquet")
-    weather_blob = bucket.blob(f"weather/ingestion_date={iso}/weather_nyc.json")
+    total_days = (args.end_date - args.start_date).days + 1
+    log.info("=" * 60)
+    log.info(f"Backfill: {args.start_date} → {args.end_date} ({total_days} days)")
+    log.info(f"Skip-if-exists: {args.skip_if_exists}   Skip-load: {args.skip_load}")
+    log.info("=" * 60)
 
-    return taxi_blob.exists(), weather_blob.exists()
-
-
-def main():
-    args = parse_args()
-    start = args.start_date
-    end = args.end_date
-    days = (end - start).days + 1
-
-    log.info("=" * 70)
-    log.info("BACKFILL")
-    log.info(f"Range:           {start.isoformat()} → {end.isoformat()} ({days} days)")
-    log.info(f"Project:         {PROJECT_ID}")
-    log.info(f"Target bucket:   {RAW_BUCKET}")
-    log.info(f"Skip if exists:  {args.skip_if_exists}")
-    log.info("=" * 70)
-
-    storage_client = storage.Client(project=PROJECT_ID) if args.skip_if_exists else None
-
-    started_at = time.monotonic()
-    succeeded = 0
-    skipped = 0
-    failed: list[tuple[date, str]] = []
-
-    for d in daterange(start, end):
+    for d in date_range(args.start_date, args.end_date):
         iso = d.isoformat()
-        log.info("")
-        log.info("-" * 70)
-        log.info(f"[{succeeded + skipped + len(failed) + 1}/{days}] {iso}")
-        log.info("-" * 70)
+        log.info(f"\n=== {iso} ===")
 
-        if args.skip_if_exists:
-            taxi_exists, weather_exists = gcs_partition_exists(storage_client, d)
-            if taxi_exists and weather_exists:
-                log.info(f"{iso}: both partitions exist, skipping")
-                skipped += 1
-                continue
-            if taxi_exists:
-                log.info(f"{iso}: taxi exists; will re-run weather only")
-            if weather_exists:
-                log.info(f"{iso}: weather exists; will re-run taxi only")
+        taxi_prefix = f"taxi/ingestion_date={iso}/"
+        weather_prefix = f"weather/ingestion_date={iso}/"
 
-        try:
-            taxi_main(ingestion_date=d)
-        except Exception as exc:
-            log.error(f"{iso}: taxi ingestion FAILED: {exc}")
-            failed.append((d, f"taxi: {exc}"))
-            continue
+        # --- Taxi ingest ---
+        if args.skip_if_exists and gcs_partition_exists(bucket, taxi_prefix):
+            log.info(f"  taxi GCS exists, skipping ingest")
+        else:
+            run_step(
+                "taxi ingest",
+                [sys.executable, str(TAXI_SCRIPT), "--ingestion-date", iso],
+            )
 
-        time.sleep(WEATHER_SLEEP_SECONDS)
+        # --- Weather ingest ---
+        if args.skip_if_exists and gcs_partition_exists(bucket, weather_prefix):
+            log.info(f"  weather GCS exists, skipping ingest")
+        else:
+            run_step(
+                "weather ingest",
+                [sys.executable, str(WEATHER_SCRIPT), "--ingestion-date", iso],
+            )
 
-        try:
-            weather_main(ingestion_date=d)
-        except Exception as exc:
-            log.error(f"{iso}: weather ingestion FAILED: {exc}")
-            failed.append((d, f"weather: {exc}"))
-            continue
+        # --- BQ load (taxi + weather, single call) ---
+        if not args.skip_load:
+            run_step(
+                "bq load",
+                [sys.executable, str(LOAD_SCRIPT), "--ingestion-date", iso],
+            )
 
-        succeeded += 1
+        time.sleep(args.sleep)
 
-    elapsed = time.monotonic() - started_at
-
-    log.info("")
-    log.info("=" * 70)
-    log.info("BACKFILL SUMMARY")
-    log.info(f"Elapsed:     {elapsed:.1f}s ({elapsed / 60:.1f} min)")
-    log.info(f"Succeeded:   {succeeded}/{days}")
-    log.info(f"Skipped:     {skipped}/{days}")
-    log.info(f"Failed:      {len(failed)}/{days}")
-    if failed:
-        log.info("")
-        log.info("Failures:")
-        for d, reason in failed:
-            log.info(f"  {d.isoformat()}: {reason}")
-    log.info("=" * 70)
-
-    log.info("")
-    log.info("Next step: GCS is now populated. Until Day 8 fixes the WRITE_TRUNCATE")
-    log.info("issue, you can manually load the last day into BQ with:")
-    log.info(
-        f"  python ingestion/batch/load_to_bigquery.py --ingestion-date {end.isoformat()}"
-    )
-
-    if failed:
-        sys.exit(1)
+    log.info("=" * 60)
+    log.info(f"Backfill complete: {total_days} days processed.")
+    log.info("=" * 60)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
