@@ -48,11 +48,14 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
+def _iso_date(s: str) -> date:
+    return datetime.strptime(s, "%Y-%m-%d").date()
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
-    iso = lambda s: datetime.strptime(s, "%Y-%m-%d").date()
-    p.add_argument("--start-date", type=iso, required=True)
-    p.add_argument("--end-date", type=iso, required=True)
+    p.add_argument("--start-date", type=_iso_date, required=True)
+    p.add_argument("--end-date", type=_iso_date, required=True)
     p.add_argument(
         "--skip-if-exists",
         action="store_true",
@@ -116,7 +119,7 @@ def main() -> int:
 
         # --- Taxi ingest ---
         if args.skip_if_exists and gcs_partition_exists(bucket, taxi_prefix):
-            log.info(f"  taxi GCS exists, skipping ingest")
+            log.info("  taxi GCS exists, skipping ingest")
         else:
             run_step(
                 "taxi ingest",
@@ -125,7 +128,7 @@ def main() -> int:
 
         # --- Weather ingest ---
         if args.skip_if_exists and gcs_partition_exists(bucket, weather_prefix):
-            log.info(f"  weather GCS exists, skipping ingest")
+            log.info("  weather GCS exists, skipping ingest")
         else:
             run_step(
                 "weather ingest",
