@@ -15,11 +15,12 @@
 
 ## Project overview
 
-This is a 6-day portfolio project demonstrating production data engineering practices on Google Cloud Platform. It ingests **485,172** NYC Yellow Taxi trips alongside **744** hourly weather records for January 2022, joins and enriches them via PySpark on Dataproc Serverless, models them as a star schema with dbt, and orchestrates the entire pipeline end-to-end with Apache Airflow.
+This is a portfolio project demonstrating production data engineering practices on Google Cloud Platform. It ingests **~2.43M** NYC Yellow Taxi trips alongside **744** hourly weather records for January 2022 (31 daily partitions), joins and enriches them via PySpark on Dataproc Serverless, models them as a star schema with dbt, and orchestrates the entire pipeline end-to-end with Apache Airflow.
 
 **Key question explored:** *How does NYC weather affect taxi trip patterns and fares?*
 
-**Sample finding:** the pipeline correctly identifies the January 7, 2022 NYC blizzard — snowfall of 1.05–1.33 cm/hr from 4–7 AM, with average fare jumping to $34.64 at 5 AM (vs ~$25 baseline).
+**Sample finding:**
+The full January 2022 backfill (~2.43M taxi trips) makes the real Jan 28–29 Nor'easter visible: Jan 28 saw 95,297 trips, Jan 29 collapsed to 34,195 (a 64% drop), with Jan 30 partially recovering to 70,805. The pre-Day-7 "LIMIT 500000" query sampled the month uniformly and masked this signal.
 
 ## Architecture
 
@@ -28,7 +29,7 @@ This is a 6-day portfolio project demonstrating production data engineering prac
 │                         DATA SOURCES                             │
 │   BigQuery Public Dataset           Open-Meteo API (Free)        │
 │   NYC Yellow Taxi 2022              Hourly NYC Weather 2022      │
-│   485,172 records                   744 hourly records           │
+│   ~2.43M records (31 partitions)    744 hourly records           │
 └──────────────┬───────────────────────────────┬──────────────────┘
                │                               │
                ▼                               ▼
@@ -47,13 +48,13 @@ This is a 6-day portfolio project demonstrating production data engineering prac
 │   spark_transform.py — join taxi+weather + feature engineering   │
 │   Writes to BigQuery: partitioned by pickup_date,                │
 │   clustered by (pickup_hour, pickup_location_id)                 │
-│                  484,091 rows after join                         │
+│         rebuilt per-partition for full month (Day 8)             │
 └──────────────────────────────┬──────────────────────────────────┘
                                │
                                ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                      MODELLING LAYER (dbt)                       │
-│   stg_trips (view) → fct_trips (484,091 rows, 18.5 MB physical)  │
+│   stg_trips (view) → fct_trips (incremental, partitioned)        │
 │   dim_dates · dim_locations · 14 data quality tests              │
 │             BigQuery marts dataset (star schema)                 │
 └──────────────────────────────┬──────────────────────────────────┘
@@ -96,9 +97,11 @@ urban-intelligence-pipeline/
 │   ├── iam.tf                     # SA + 8 IAM bindings
 │   └── ...
 ├── ingestion/batch/               # Python: extract → GCS → BQ raw
-│   ├── taxi_ingestion.py          # 485K rows from BQ public dataset
-│   ├── weather_ingestion.py       # 744 hours from Open-Meteo
-│   └── load_to_bigquery.py
+│   ├── taxi_ingestion.py          # parameterized by --ingestion-date
+│   ├── weather_ingestion.py       # 24 hourly records per day
+│   └── load_to_bigquery.py        # DELETE-then-APPEND per partition
+├── scripts/
+│   └── backfill.py                # resumable date-range backfill
 ├── transform/
 │   └── spark_transform.py         # Dataproc Serverless PySpark job
 ├── dbt/urban_pipeline_dbt/
@@ -109,7 +112,7 @@ urban-intelligence-pipeline/
 ├── airflow/
 │   ├── docker-compose.yml         # Postgres + scheduler + webserver
 │   └── dags/urban_pipeline_dag.py # 6-task DAG
-├── tests/                         # pytest smoke tests (11 tests)
+├── tests/                         # pytest smoke tests
 ├── docs/
 │   └── ADR-001-platform-choices.md  # Architecture Decision Record
 └── README.md
@@ -117,14 +120,15 @@ urban-intelligence-pipeline/
 
 ## Data layers
 
-| Layer  | Location                                                              | Format                                                                                | Volume                          |
-|--------|-----------------------------------------------------------------------|---------------------------------------------------------------------------------------|---------------------------------|
-| Raw | `gs://urban-pipeline-kd-2026-raw/{taxi,weather}/ingestion_date=YYYY-MM-DD/` | Parquet + JSON | 31 daily partitions: ~2.4M trips + 744 weather hours total |
-| Bronze | BigQuery `raw.*` | Native BQ | Currently 1 day until Day 8 fixes WRITE_TRUNCATE; will be ~2.4M trips |
-| Silver | BigQuery `staging.taxi_trips_enriched` | Partitioned by `pickup_date`, clustered by `pickup_hour, pickup_location_id` | To be regenerated in Day 8 |
-| Gold | BigQuery `marts.{dim_dates, dim_locations, fct_trips}` | Star schema | To be regenerated in Day 8 |                                                                         | fct_trips: 484K rows, 18.5 MB physical |
+| Layer | Format | Location | Rows (Jan 2022) |
+| --- | --- | --- | --- |
+| Raw — taxi | parquet | `gs://…-raw/taxi/ingestion_date=…/` | 31 partitions, ~2.43M |
+| Raw — weather | json | `gs://…-raw/weather/ingestion_date=…/` | 31 partitions, 744 hours |
+| Raw — BQ | partitioned table | `raw.taxi_trips`, `raw.weather_hourly` | matches GCS |
+| Staging | partitioned + clustered | `staging.taxi_trips_enriched` | regenerated by Day 8 |
+| Marts | partitioned | `marts.fct_trips` (incremental) | regenerated by Day 8 |
 
-## Build log — 6 days
+## Build log
 
 ### Day 1 — Terraform foundation
 
@@ -132,17 +136,15 @@ Provisioned 24 GCP resources via Terraform: 10 APIs enabled, 3 GCS buckets (raw/
 
 ### Day 2 — Python ingestion
 
-Built three ingestion scripts: taxi pull from BigQuery public dataset (`bigquery-public-data.new_york_taxi_trips.tlc_yellow_trips_2022`) cleaning to 485K rows; Open-Meteo API call producing 744 hourly records; parquet/JSON loaders into BQ raw.
+Built three ingestion scripts: taxi pull from BigQuery public dataset (`bigquery-public-data.new_york_taxi_trips.tlc_yellow_trips_2022`) — originally cleaned to a 485K-row sample, later parameterized in Day 7 to load full daily partitions (~2.43M rows across 31 days for January 2022); Open-Meteo API call producing 24 hourly records per day; parquet/JSON loaders into BQ raw.
 
 ### Day 3 — PySpark on Dataproc Serverless
 
-Wrote `spark_transform.py` that reads BQ raw, joins on `date_trunc('hour', pickup_datetime) == to_timestamp(time)`, derives `is_raining`, `is_snowing`, `weather_severity` (clear/freezing/light_rain/heavy_rain/blizzard), `tip_pct`. Submitted as Dataproc Serverless batch with `writeMethod=indirect` to preserve partitioning. Output: 484K rows across 31 daily partitions.
-
-**Key insight:** the January 7, 2022 NYC blizzard surfaced — 4-7 AM saw 1+ cm/hr snowfall and average fare of $34.64.
+Wrote `spark_transform.py` that reads BQ raw, joins on `date_trunc('hour', pickup_datetime) == to_timestamp(time)`, derives `is_raining`, `is_snowing`, `weather_severity` (clear/freezing/light_rain/heavy_rain/blizzard), `tip_pct`. Submitted as Dataproc Serverless batch with `writeMethod=indirect` to preserve partitioning. Output: 484K rows initially (sampled raw), later rebuilt across 31 daily partitions on Day 7's full backfill.
 
 ### Day 4 — dbt models
 
-Set up dbt-bigquery with OAuth via ADC. Built `stg_trips` (view), `dim_dates` (date spine 2022-01-01 to 2022-12-31), `dim_locations` (260 distinct pickup+dropoff zones), and `fct_trips` (484,091 rows, 31 partitions, 18.49 MB physical). All 11 generic tests passing.
+Set up dbt-bigquery with OAuth via ADC. Built `stg_trips` (view), `dim_dates` (date spine 2022-01-01 to 2022-12-31), `dim_locations` (260 distinct pickup+dropoff zones), and `fct_trips` (partitioned by `pickup_date`, clustered by `pickup_hour, pickup_location_id` — converted to incremental materialization in Day 8). All 11 generic tests passing.
 
 ### Day 5 — Airflow orchestration
 
@@ -150,7 +152,11 @@ Built 6-task DAG running ingestion → load → Spark transform → dbt run → 
 
 ### Day 6 — Tests, monitoring, README
 
-Added pytest smoke tests for ingestion modules (11 tests). Added 3 singular dbt tests (`positive_fares`, `no_future_trips`, `dropoff_after_pickup`). Added monitoring SQL analyses (`data_freshness`, `weather_impact_summary`). Created GitHub Actions CI workflow.
+Added pytest smoke tests for ingestion modules. Added 3 singular dbt tests (`positive_fares`, `no_future_trips`, `dropoff_after_pickup`). Added monitoring SQL analyses (`data_freshness`, `weather_impact_summary`). Created GitHub Actions CI workflow.
+
+### Day 7 — Incremental ingestion + full backfill
+
+Parameterized `taxi_ingestion.py`, `weather_ingestion.py`, and `load_to_bigquery.py` with `--ingestion-date`. Switched `load_to_bigquery.py` from `WRITE_TRUNCATE` to DELETE-then-APPEND scoped to the ingestion date so daily runs are idempotent and safe to retry. Wired the Airflow DAG to pass `{{ ds }}` (logical date) through to every task. Added `scripts/backfill.py` for resumable date-range backfills with `--skip-if-exists` and `--skip-load` flags. Backfilled full January 2022 (~2.43M taxi rows + 744 weather rows across 31 daily partitions).
 
 ## Key engineering decisions
 
@@ -158,6 +164,7 @@ Added pytest smoke tests for ingestion modules (11 tests). Added 3 singular dbt 
 - **Indirect write mode + `createDisposition=CREATE_IF_NEEDED`**: BQ Spark connector silently dropped partitioning config in direct mode.
 - **OAuth/ADC over service account keys**: org policy `iam.disableServiceAccountKeyCreation` enforced; ADC volume-mounted into Airflow containers.
 - **Hive-style date partitioning in raw bucket**: `taxi/ingestion_date=YYYY-MM-DD/` enables efficient time-range scans.
+- **DELETE-then-APPEND per partition**: `load_to_bigquery.py` deletes the target partition before appending, so re-running a date is idempotent and partial backfills resume cleanly.
 - **Surrogate keys via wide MD5**: `MD5(pickup_dt, dropoff_dt, pickup_loc, dropoff_loc, fare, tip, distance)` — narrower hashes produced ~36 collisions.
 - **Cluster on `pickup_hour, pickup_location_id`**: matches the most common analytical query pattern (hourly breakdowns by zone).
 
@@ -166,7 +173,7 @@ See [`docs/ADR-001-platform-choices.md`](docs/ADR-001-platform-choices.md) for a
 ## Tests
 
 ~~~bash
-# Python smoke tests (module imports, constants, file structure)
+# Python smoke tests (module imports, constants, file structure, path conventions)
 pytest tests/ -v
 
 # dbt tests (11 generic + 3 singular)
@@ -177,7 +184,7 @@ CI runs both on every push to `main`.
 
 ## Cost
 
-Approximate cost for one full pipeline run on GCP:
+Approximate cost for one full January 2022 backfill on GCP:
 
 | Component | Cost |
 | --- | --- |
@@ -190,21 +197,20 @@ Approximate cost for one full pipeline run on GCP:
 
 Per-day incremental runs (Day 8+) will be substantially cheaper since dbt processes only new partitions.
 
-
 ## Sample analytical query
 
-    -- Trips per day across January 2022 — captures the Jan 28-29 Nor'easter
-    select
-        pickup_date,
-        count(*) as trips,
-        round(avg(fare_amount), 2) as avg_fare
-    from `urban-pipeline-kd-2026.marts.fct_trips`
-    where pickup_date between '2022-01-01' and '2022-01-31'
-    group by 1
-    order by 1
+```sql
+-- Trips per day across the Jan 28-29 Nor'easter
+SELECT pickup_date, COUNT(*) AS trips
+FROM `urban-pipeline-kd-2026.raw.taxi_trips`
+WHERE pickup_date BETWEEN '2022-01-28' AND '2022-01-30'
+GROUP BY pickup_date ORDER BY pickup_date;
+-- 2022-01-28  95,297   (Friday, pre-storm)
+-- 2022-01-29  34,195   (Saturday, Nor'easter — 64% collapse)
+-- 2022-01-30  70,805   (Sunday, partial recovery)
+```
 
-The January 28-29 Nor'easter is visible in the data: Friday Jan 28 had 95,873 trips (a normal weekday volume), Saturday Jan 29 collapsed to 34,388 trips (less than half the surrounding Saturdays), and Sunday Jan 30 partially recovered to 71,229 as the city dug out. To be re-verified end-to-end once Day 8 fixes the WRITE_TRUNCATE issue and rebuilds `fct_trips` from the full backfill.
-~~~
+The January 28–29 Nor'easter is visible in the raw layer: Friday Jan 28 saw 95,297 trips (a normal weekday volume), Saturday Jan 29 collapsed to 34,195 (a 64% drop, less than half the surrounding Saturdays), and Sunday Jan 30 partially recovered to 70,805 as the city dug out. Day 8 will rebuild `staging.taxi_trips_enriched` and `marts.fct_trips` from the full backfill so the same query can run against the gold layer.
 
 ## Running locally
 
@@ -233,10 +239,10 @@ cd ..
 python -m venv venv && source venv/Scripts/activate
 pip install -r requirements.txt
 
-# 4. Run pipeline manually (one-shot)
-python ingestion/batch/taxi_ingestion.py
-python ingestion/batch/weather_ingestion.py
-python ingestion/batch/load_to_bigquery.py
+# 4. Run pipeline manually for a single day
+python ingestion/batch/taxi_ingestion.py    --ingestion-date 2022-01-31
+python ingestion/batch/weather_ingestion.py --ingestion-date 2022-01-31
+python ingestion/batch/load_to_bigquery.py  --ingestion-date 2022-01-31
 
 gcloud storage cp transform/spark_transform.py gs://urban-pipeline-kd-2026-scripts/transform/
 gcloud dataproc batches submit pyspark \
@@ -245,7 +251,8 @@ gcloud dataproc batches submit pyspark \
     --service-account=urban-pipeline-sa@urban-pipeline-kd-2026.iam.gserviceaccount.com \
     --version=2.2 --jars=gs://spark-lib/bigquery/spark-3.5-bigquery-0.42.0.jar \
     -- --project=urban-pipeline-kd-2026 --raw-dataset=raw \
-       --staging-dataset=staging --gcs-temp-bucket=urban-pipeline-kd-2026-staging
+       --staging-dataset=staging --gcs-temp-bucket=urban-pipeline-kd-2026-staging \
+       --ingestion-date=2022-01-31
 
 cd dbt/urban_pipeline_dbt && dbt build --profiles-dir ~/.dbt
 
@@ -255,25 +262,26 @@ echo "AIRFLOW_UID=50000" > .env
 docker compose up airflow-init
 docker compose up -d
 # Open http://localhost:8080, login admin/admin, trigger urban_pipeline DAG
-
+~~~
 
 ### Backfill historical dates
 
-The DAG ingests for one day at a time using Airflow's `{{ ds }}` macro (logical date / data_interval_start). For one-off historical loads — for example, populating January 2022 to demo the pipeline — use the standalone backfill script:
+The DAG ingests one day at a time via Airflow's `{{ ds }}` macro (logical date / `data_interval_start`). For one-off historical loads — for example, populating January 2022 to demo the pipeline — use the standalone backfill script:
 
-    # Populate 31 GCS partitions (~7 minutes, ~$0 marginal cost)
-    python scripts/backfill.py --start-date 2022-01-01 --end-date 2022-01-31
+~~~bash
+# Populate 31 GCS partitions + load to BQ
+python scripts/backfill.py --start-date 2022-01-01 --end-date 2022-01-31
 
-    # Resume after a failure — skips dates whose GCS partition already exists
-    python scripts/backfill.py --start-date 2022-01-01 --end-date 2022-01-31 --skip-if-exists
+# Resume after a failure — skips dates whose GCS partition already exists
+python scripts/backfill.py --start-date 2022-01-01 --end-date 2022-01-31 \
+    --skip-if-exists
 
-    ~~~
+# Ingest GCS only, skip BQ load (e.g. for cost control)
+python scripts/backfill.py --start-date 2022-01-01 --end-date 2022-01-31 \
+    --skip-load
+~~~
 
-The script only writes to GCS. To materialize a single day into BigQuery for inspection:
-
-    python ingestion/batch/load_to_bigquery.py --ingestion-date 2022-01-31
-
-`load_to_bigquery.py` currently uses `WRITE_TRUNCATE`, so each invocation replaces the BigQuery table with that one day's data. Day 8 will partition the raw tables and switch to DELETE-then-APPEND so the full month materializes.
+`scripts/backfill.py` calls `taxi_ingestion.py` → `weather_ingestion.py` → `load_to_bigquery.py` per day. The load step does DELETE-then-APPEND scoped to `--ingestion-date`, so running the same day twice is idempotent and partial backfills are safe to resume.
 
 ## Architecture Decision Record
 
