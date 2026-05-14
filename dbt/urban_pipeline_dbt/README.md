@@ -1,15 +1,32 @@
-Welcome to your new dbt project!
+# urban_pipeline_dbt
 
-### Using the starter project
+dbt project for the Urban Intelligence Pipeline — the modelling layer that
+turns `staging.taxi_trips_enriched` into an analysis-ready star schema in
+BigQuery.
 
-Try running the following commands:
-- dbt run
-- dbt test
+## Models
 
+| Model | Materialization | Notes |
+| --- | --- | --- |
+| `stg_trips` | view | Surrogate key (MD5 hash), type casts, quality filter (`fare_amount > 0`, valid duration) |
+| `dim_dates` | table | Date spine 2022-01-01 → 2022-12-31 |
+| `dim_locations` | table | Pickup/dropoff zones with volume tiering |
+| `fct_trips` | incremental | One row per trip, enriched with weather + dimension keys. `insert_overwrite` strategy, partitioned by `pickup_date` |
 
-### Resources:
-- Learn more about dbt [in the docs](https://docs.getdbt.com/docs/introduction)
-- Check out [Discourse](https://discourse.getdbt.com/) for commonly asked questions and answers
-- Join the [chat](https://community.getdbt.com/) on Slack for live discussions and support
-- Find [dbt events](https://events.getdbt.com) near you
-- Check out [the blog](https://blog.getdbt.com/) for the latest news on dbt's development and best practices
+## Snapshots
+
+| Snapshot | Strategy | Notes |
+| --- | --- | --- |
+| `dim_locations_snapshot` | check | SCD2 history of `volume_tier` / `total_pickups` per zone |
+
+## Common commands
+
+~~~bash
+dbt run --profiles-dir ~/.dbt                      # build all models
+dbt run --select fct_trips --profiles-dir ~/.dbt   # incremental run (latest partition only)
+dbt run --select fct_trips --full-refresh --profiles-dir ~/.dbt   # full rebuild
+dbt snapshot --profiles-dir ~/.dbt                 # capture dim_locations SCD2
+dbt test --profiles-dir ~/.dbt                     # 14 data tests
+~~~
+
+See the [repository README](../../README.md) for the full pipeline architecture.
