@@ -5,8 +5,8 @@ SELECT
     TO_HEX(MD5(CONCAT(
         CAST(pickup_datetime AS STRING),
         CAST(dropoff_datetime AS STRING),
-        COALESCE(pickup_location_id, ''),
-        COALESCE(dropoff_location_id, ''),
+        COALESCE(CAST(pickup_location_id AS STRING), ''),
+        COALESCE(CAST(dropoff_location_id AS STRING), ''),
         CAST(fare_amount AS STRING),
         CAST(tip_amount AS STRING),
         CAST(trip_distance AS STRING)

@@ -1,7 +1,9 @@
 {{ config(
-    materialized='table',
+    materialized='incremental',
+    incremental_strategy='insert_overwrite',
     partition_by={'field': 'pickup_date', 'data_type': 'date', 'granularity': 'day'},
-    cluster_by=['pickup_hour', 'pickup_location_id']
+    cluster_by=['pickup_hour', 'pickup_location_id'],
+    on_schema_change='sync_all_columns'
 ) }}
 
 SELECT
@@ -41,3 +43,10 @@ FROM {{ ref('stg_trips') }} t
 LEFT JOIN {{ ref('dim_locations') }} pl ON t.pickup_location_id = pl.location_id
 LEFT JOIN {{ ref('dim_locations') }} dl ON t.dropoff_location_id = dl.location_id
 LEFT JOIN {{ ref('dim_dates') }} d ON t.pickup_date = d.date_day
+
+{% if is_incremental() %}
+-- Incremental runs reprocess only partitions at or after the latest
+-- pickup_date already in the table. insert_overwrite then atomically
+-- replaces those whole partitions — re-running a day is safe, no dupes.
+WHERE t.pickup_date >= (SELECT MAX(pickup_date) FROM {{ this }})
+{% endif %}
