@@ -1,0 +1,83 @@
+[project]
+name = "urban-intelligence-pipeline"
+version = "0.1.0"
+description = "Partition-aware urban data pipeline: BigQuery + Dataproc/Spark + dbt"
+readme = "README.md"
+requires-python = "==3.11.9"
+license = { text = "MIT" }
+authors = [
+    { name = "Kaushik Das" },
+]
+
+# ---------------------------------------------------------------------------
+# RUNTIME DEPENDENCIES
+# ---------------------------------------------------------------------------
+# Reconciled 1:1 against requirements.txt. Exact pins preserved deliberately:
+# these are the versions Day 8 was verified on. uv.lock pins transitive deps
+# on top of these.
+#
+# Note: pyspark and google-cloud-dataproc are intentionally absent.
+# Spark runs on Dataproc Serverless, submitted via gcloud CLI in
+# scripts/transform_backfill.sh — neither library is needed locally.
+dependencies = [
+    "google-cloud-bigquery==3.27.0",
+    "google-cloud-bigquery-storage==2.27.0",
+    "google-cloud-storage==2.19.0",
+    "db-dtypes==1.4.0",
+    "dbt-bigquery==1.8.3",
+    "pandas==2.2.3",
+    "pyarrow==18.1.0",
+    "requests==2.32.3",
+]
+
+# ---------------------------------------------------------------------------
+# OPTIONAL / DEV DEPENDENCIES
+# ---------------------------------------------------------------------------
+# Installed with:  uv sync --extra dev
+#
+# Moved here from requirements.txt: jupyter, ipykernel, pytest.
+# Rationale: none of these are imported by runtime scripts — they're for
+# local exploration and testing. CI's "production-like" install can skip them.
+# If a runtime script DOES end up importing jupyter (unlikely), move it back
+# to [dependencies].
+#
+# Added for commits 3.3/3.4: black, flake8, pre-commit.
+[project.optional-dependencies]
+dev = [
+    "black>=24.8.0",
+    "flake8>=7.1.0",
+    "pre-commit>=3.8.0",
+    "pytest==8.3.4",
+    "jupyter==1.1.1",
+    "ipykernel==6.29.5",
+]
+
+# ---------------------------------------------------------------------------
+# BUILD SYSTEM
+# ---------------------------------------------------------------------------
+# Hatchling is uv's default and the lightest reasonable choice. This repo is an
+# application, not a library, so the build backend barely matters — but uv wants
+# one declared, and hatchling needs to know there's no importable package.
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# This repo is a collection of scripts (transform/, scripts/, dbt/), not an
+# installable package. Tell hatchling not to look for a package to build.
+bypass-selection = true
+
+# ---------------------------------------------------------------------------
+# TOOL CONFIG (centralized here so pre-commit + CI read one source of truth)
+# ---------------------------------------------------------------------------
+[tool.black]
+line-length = 88
+target-version = ["py311"]
+
+# flake8 does NOT read pyproject.toml natively — it needs setup.cfg or
+# .flake8. Real flake8 config lives in .flake8, created in commit 3.3.
+
+[tool.uv]
+# Keeps uv from trying to build/install THIS project into the venv —
+# we only want the dependencies, not the repo itself as a package.
+package = false
