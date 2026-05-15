@@ -21,7 +21,7 @@ resource "google_bigquery_table" "taxi_trips" {
   }
 
   require_partition_filter = false
-  
+
 
   clustering = ["pickup_hour", "pickup_location_id"]
 
@@ -49,7 +49,7 @@ resource "google_bigquery_table" "weather_hourly" {
   }
 
   require_partition_filter = false
-  
+
 
   deletion_protection = false
 

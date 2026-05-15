@@ -92,7 +92,9 @@ with DAG(
         batch_id="urban-pipeline-{{ ds_nodash }}-{{ ts_nodash }}",
         batch={
             "pyspark_batch": {
-                "main_python_file_uri": f"gs://{SCRIPTS_BUCKET}/transform/spark_transform.py",
+                "main_python_file_uri": (
+                    f"gs://{SCRIPTS_BUCKET}/transform/spark_transform.py"
+                ),
                 "jar_file_uris": [
                     "gs://spark-lib/bigquery/spark-3.5-bigquery-0.42.0.jar"
                 ],
@@ -116,12 +118,16 @@ with DAG(
 
     dbt_run = BashOperator(
         task_id="dbt_run",
-        bash_command="cd /opt/airflow/dbt/urban_pipeline_dbt && dbt run --profiles-dir .",
+        bash_command=(
+            "cd /opt/airflow/dbt/urban_pipeline_dbt " "&& dbt run --profiles-dir ."
+        ),
     )
 
     dbt_test = BashOperator(
         task_id="dbt_test",
-        bash_command="cd /opt/airflow/dbt/urban_pipeline_dbt && dbt test --profiles-dir .",
+        bash_command=(
+            "cd /opt/airflow/dbt/urban_pipeline_dbt " "&& dbt test --profiles-dir ."
+        ),
     )
 
     (

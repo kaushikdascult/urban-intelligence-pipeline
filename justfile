@@ -15,6 +15,7 @@ default:
 # Install all dependencies (runtime + dev) into .venv via uv
 setup:
     uv sync --extra dev
+    uv run pre-commit install
 
 # Print resolved versions of key tools (sanity check after `just setup`)
 versions:
@@ -27,13 +28,18 @@ versions:
 # Code quality
 # ---------------------------------------------------------------------------
 
-# Run black formatter check. Matches what CI runs. (flake8 joins in 3.3.)
+# Run black --check + flake8. Matches what CI runs.
 lint:
     uv run black --check --diff ingestion/ transform/ tests/ airflow/dags/ scripts/
+    uv run flake8 ingestion/ transform/ tests/ airflow/dags/ scripts/
 
 # Auto-format code in place with black (NOT what CI does — CI only checks).
 format:
     uv run black ingestion/ transform/ tests/ airflow/dags/ scripts/
+
+# Run all pre-commit hooks on every file (not just staged changes)
+precommit:
+    uv run pre-commit run --all-files
 
 # Run the pytest smoke suite
 test:

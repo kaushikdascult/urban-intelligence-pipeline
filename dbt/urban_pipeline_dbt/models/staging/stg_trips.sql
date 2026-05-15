@@ -11,28 +11,28 @@ SELECT
         CAST(tip_amount AS STRING),
         CAST(trip_distance AS STRING)
     ))) AS trip_id,
-    
+
     vendor_id,
     pickup_datetime,
     dropoff_datetime,
     pickup_date,
     pickup_hour,
     day_of_week,
-    
+
     CAST(passenger_count AS INT64) AS passenger_count,
     CAST(trip_distance AS FLOAT64) AS trip_distance,
     trip_duration_minutes,
-    
+
     CAST(fare_amount AS FLOAT64) AS fare_amount,
     CAST(tip_amount AS FLOAT64) AS tip_amount,
     CAST(total_amount AS FLOAT64) AS total_amount,
     CAST(tip_pct AS FLOAT64) AS tip_pct,
-    
+
     pickup_location_id,
     dropoff_location_id,
-    
+
     payment_type,
-    
+
     -- Weather features
     temperature_2m AS temperature_c,
     relative_humidity_2m AS humidity_pct,

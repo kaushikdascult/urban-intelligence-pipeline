@@ -1,0 +1,26 @@
+[flake8]
+# Match black's default. Black is the source of truth for formatting;
+# flake8 is for things black doesn't check (imports, undefined names, etc.)
+max-line-length = 88
+
+# E203: whitespace before ':' — black does this intentionally in slices
+#       (e.g. `arr[1 : x + 1]`). PEP 8 itself now considers it correct.
+# W503: line break before binary operator — black breaks BEFORE operators,
+#       which is also the modern PEP 8 recommendation. Old flake8 still
+#       flags it; we silence it.
+extend-ignore = E203, W503
+
+# Mirror what we lint via just. Anything outside these paths gets ignored
+# even if a developer accidentally runs `flake8 .`
+# (Caches and venvs already excluded by default.)
+exclude =
+    .git,
+    .venv,
+    venv,
+    __pycache__,
+    .pytest_cache,
+    dbt/urban_pipeline_dbt/target,
+    dbt/urban_pipeline_dbt/dbt_packages,
+    terraform,
+    airflow/logs,
+    airflow/plugins

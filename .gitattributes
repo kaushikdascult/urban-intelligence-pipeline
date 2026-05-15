@@ -1,0 +1,37 @@
+# Enforce LF line endings for all text files regardless of OS.
+# Without this, Windows clients with core.autocrlf=true rewrite files
+# to CRLF on checkout, which then conflicts with pre-commit hooks
+# (end-of-file-fixer, trailing-whitespace) that write LF.
+
+# Default: treat everything as text and normalize to LF.
+# Binary files (parquet, jar, png, etc.) are auto-detected.
+* text=auto eol=lf
+
+# Be explicit for the file types we care about, in case auto-detection misses one.
+*.py        text eol=lf
+*.sh        text eol=lf
+*.sql       text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.json      text eol=lf
+*.toml      text eol=lf
+*.md        text eol=lf
+*.tf        text eol=lf
+*.txt       text eol=lf
+*.cfg       text eol=lf
+*.ini       text eol=lf
+Makefile    text eol=lf
+justfile    text eol=lf
+.flake8     text eol=lf
+.gitignore  text eol=lf
+.gitattributes text eol=lf
+
+# Binary blobs — never touch line endings.
+*.parquet   binary
+*.jar       binary
+*.png       binary
+*.jpg       binary
+*.ico       binary
+*.zip       binary
+*.gz        binary
+*.tar       binary

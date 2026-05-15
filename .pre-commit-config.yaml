@@ -1,0 +1,58 @@
+# Run with:  uv run pre-commit run --all-files
+# Install once per clone with:  uv run pre-commit install
+#
+# Each hook here mirrors what just/CI run, so devs catch issues before push
+# instead of waiting on GitHub Actions. Keep this list lean — every hook
+# runs on every commit.
+
+repos:
+  # -----------------------------------------------------------------------
+  # Standard hygiene — trailing whitespace, EOL, mixed line endings, etc.
+  # -----------------------------------------------------------------------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      # Strip trailing whitespace from every committed line.
+      - id: trailing-whitespace
+        # Markdown's two-trailing-spaces = hard line break is a real syntax,
+        # so don't strip it inside .md files.
+        args: [--markdown-linebreak-ext=md]
+
+      # Ensure every text file ends with exactly one newline character.
+      - id: end-of-file-fixer
+
+      # Reject any single file > 500 KB. Stops accidental commits of
+      # parquet/csv/binary blobs. uv.lock is fine (~70 KB).
+      - id: check-added-large-files
+        args: [--maxkb=500]
+
+      # Parse YAML files to catch syntax errors before they break CI.
+      - id: check-yaml
+
+      # Same for JSON — catches malformed terraform/schemas/*.json especially.
+      - id: check-json
+
+      # Refuse to commit unresolved merge conflict markers (<<<<<<< etc.)
+      - id: check-merge-conflict
+
+  # -----------------------------------------------------------------------
+  # Formatter — black auto-fixes; if it changes a file, the commit aborts
+  # and re-staging the fix is on you. Black is the source of truth.
+  # -----------------------------------------------------------------------
+  - repo: https://github.com/psf/black
+    rev: 25.12.0
+    hooks:
+      - id: black
+        language_version: python3.11
+        # Only lint actual source dirs. terraform/, dbt/, etc. are excluded.
+        files: ^(ingestion|transform|tests|airflow/dags|scripts)/.*\.py$
+
+  # -----------------------------------------------------------------------
+  # Linter — flake8 reads .flake8 in repo root (max-line-length=88, ignores
+  # E203/W503 to stay friendly with black). Does not auto-fix; rejects.
+  # -----------------------------------------------------------------------
+  - repo: https://github.com/pycqa/flake8
+    rev: 7.3.0
+    hooks:
+      - id: flake8
+        files: ^(ingestion|transform|tests|airflow/dags|scripts)/.*\.py$
