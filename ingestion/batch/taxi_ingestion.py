@@ -119,6 +119,22 @@ def clean_taxi_data(df: pd.DataFrame) -> pd.DataFrame:
     df = df[(df["trip_duration_minutes"] > 0) & (df["trip_duration_minutes"] < 24 * 60)]
     df = df[df["fare_amount"] >= 0]
 
+    # ADD THIS BLOCK:
+    # Normalize ID columns from STRING (public source) to INTEGER (our schema).
+    # The public dataset stores vendor_id, pickup_location_id, dropoff_location_id
+    # as STRING even though their values are always numeric. We cast here so the
+    # parquet matches our Terraform-managed schema.
+    for col in ["vendor_id", "pickup_location_id", "dropoff_location_id"]:
+        original_nulls = df[col].isna().sum()
+        df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
+        new_nulls = df[col].isna().sum()
+        coerced = new_nulls - original_nulls
+        if coerced > 0:
+            log.warning(
+                f"{col}: {coerced} non-numeric values coerced to NULL "
+                f"(was {original_nulls} null, now {new_nulls})"
+            )
+
     final = len(df)
     log.info(f"Cleaned: {initial:,} -> {final:,} rows ({initial - final:,} dropped)")
     return df

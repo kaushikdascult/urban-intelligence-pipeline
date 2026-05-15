@@ -57,3 +57,28 @@ resource "google_bigquery_table" "weather_hourly" {
     google_bigquery_dataset.datasets
   ]
 }
+
+resource "google_bigquery_table" "taxi_trips_enriched" {
+  project    = var.project_id
+  dataset_id = google_bigquery_dataset.datasets["staging"].dataset_id
+  table_id   = "taxi_trips_enriched"
+
+  description = "Enriched taxi trips joined with hourly weather. Partitioned by pickup_date, clustered by pickup_hour and pickup_location_id."
+
+  schema = file("${path.module}/schemas/taxi_trips_enriched.json")
+
+  time_partitioning {
+    type  = "DAY"
+    field = "pickup_date"
+  }
+
+  require_partition_filter = false
+
+  clustering = ["pickup_hour", "pickup_location_id"]
+
+  deletion_protection = false
+
+  depends_on = [
+    google_bigquery_dataset.datasets
+  ]
+}

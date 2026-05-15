@@ -14,5 +14,5 @@
   {"name": "latitude", "type": "FLOAT", "mode": "NULLABLE"},
   {"name": "longitude", "type": "FLOAT", "mode": "NULLABLE"},
   {"name": "ingested_at_utc", "type": "TIMESTAMP", "mode": "NULLABLE"},
-  {"name": "weather_date", "type": "DATE", "mode": "REQUIRED"}
+  {"name": "weather_date", "type": "DATE", "mode": "NULLABLE"}
 ]

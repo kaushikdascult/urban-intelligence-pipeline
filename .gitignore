@@ -44,4 +44,3 @@ airflow/plugins/__pycache__/
 
 # CI
 .pytest_cache/
-*.egg-info/
