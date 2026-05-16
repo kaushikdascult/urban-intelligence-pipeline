@@ -84,3 +84,11 @@ transform: upload-spark backfill
 
 # Run everything CI runs locally, in the same order. Use before pushing.
 ci: lint test dbt-compile
+
+# ---------------------------------------------------------------------------
+# Operational CLI
+# ---------------------------------------------------------------------------
+
+# Run the urban operational CLI (wraps ingestion + backfill + cost reporting)
+urban *ARGS:
+    uv run python -m cli {{ARGS}}
