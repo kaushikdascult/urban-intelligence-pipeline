@@ -14,10 +14,10 @@ jobs:
     name: Python tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
 
@@ -39,7 +39,7 @@ jobs:
     name: Airflow DAG syntax check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
@@ -66,10 +66,10 @@ jobs:
     name: dbt parse
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
 
@@ -98,10 +98,10 @@ jobs:
     name: Code quality
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
 
