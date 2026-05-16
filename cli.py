@@ -42,10 +42,32 @@ def urban():
 def ingest(ingestion_date, skip_load):
     """Ingest one day: taxi + weather -> GCS, then load -> BigQuery.
 
-    Wraps taxi_ingestion / weather_ingestion / load_to_bigquery.
-    Implemented in commit 4.2.
+    Calls each module's main(ingestion_date=<date>) directly — the
+    Airflow-style call path. parse_args/argv in those modules is never
+    invoked, so their CLI contract (tested by test_ingestion_paths.py)
+    is untouched. Date validation happens here, in Click.
     """
-    raise click.ClickException("urban ingest is implemented in commit 4.2.")
+    # Click hands back a datetime; the modules type-hint date.
+    day = ingestion_date.date()
+
+    from ingestion.batch import taxi_ingestion, weather_ingestion
+
+    click.echo(f"==> Taxi ingestion for {day.isoformat()}")
+    taxi_ingestion.main(ingestion_date=day)
+
+    click.echo(f"==> Weather ingestion for {day.isoformat()}")
+    weather_ingestion.main(ingestion_date=day)
+
+    if skip_load:
+        click.echo("==> Skipping BigQuery load (--skip-load).")
+        return
+
+    from ingestion.batch import load_to_bigquery
+
+    click.echo(f"==> Loading {day.isoformat()} into BigQuery")
+    load_to_bigquery.main(ingestion_date=day)
+
+    click.echo(f"==> Done: {day.isoformat()} ingested and loaded.")
 
 
 @urban.command()
