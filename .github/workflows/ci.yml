@@ -7,76 +7,115 @@ on:
     branches: [main]
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # Python tests — pytest via uv sync (replaces pip install -r requirements.txt)
+  # ---------------------------------------------------------------------------
   python-tests:
     name: Python tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          cache: 'pip'
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-      - name: Run pytest smoke tests
-        run: pytest tests/ -v
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11.9
+
+      - name: Install dependencies (runtime + dev)
+        run: uv sync --extra dev
+
+      - name: Run pytest smoke tests
+        run: uv run pytest tests/ -v
+
+  # ---------------------------------------------------------------------------
+  # Airflow DAG validation — kept on pip + Airflow's official constraints file.
+  # Airflow's dep graph is notoriously fragile; uv-managed pyproject.toml would
+  # fight Airflow's constraints mechanism. Leaving this alone is the right call.
+  # ---------------------------------------------------------------------------
   airflow-dag-validation:
     name: Airflow DAG syntax check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
+
       - name: Install Airflow + Google provider
         run: |
           python -m pip install --upgrade pip
-          pip install apache-airflow==2.10.3 apache-airflow-providers-google --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.10.3/constraints-3.11.txt"
+          pip install apache-airflow==2.10.3 apache-airflow-providers-google \
+            --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.10.3/constraints-3.11.txt"
+
       - name: Validate DAG can be parsed
         run: |
           export AIRFLOW__CORE__LOAD_EXAMPLES=False
           export AIRFLOW__CORE__DAGS_FOLDER=$GITHUB_WORKSPACE/airflow/dags
           python -c "import sys; sys.path.insert(0, 'airflow/dags'); from urban_pipeline_dag import dag; assert dag is not None; print(f'DAG loaded: {dag.dag_id} with {len(dag.tasks)} tasks')"
 
+  # ---------------------------------------------------------------------------
+  # dbt parse — uses pyproject.toml's pinned dbt-bigquery, single source of truth
+  # ---------------------------------------------------------------------------
   dbt-parse:
     name: dbt parse
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
         with:
-          python-version: '3.11'
-      - name: Install dbt-bigquery
-        run: pip install dbt-bigquery==1.8.3
+          enable-cache: true
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11.9
+
+      - name: Install dependencies (runtime only — dbt is in [dependencies])
+        run: uv sync
+
       - name: Create stub profiles.yml
         run: |
           mkdir -p ~/.dbt
           printf 'urban_pipeline_dbt:\n  target: ci\n  outputs:\n    ci:\n      type: bigquery\n      method: oauth\n      project: ci-stub-project\n      dataset: ci_stub\n      threads: 1\n      location: US\n' > ~/.dbt/profiles.yml
           cat ~/.dbt/profiles.yml
+
       - name: dbt parse
         working-directory: dbt/urban_pipeline_dbt
-        run: dbt parse
+        run: uv run dbt parse
 
+  # ---------------------------------------------------------------------------
+  # Code quality — pre-commit runs ALL hooks (black, flake8, whitespace, EOL,
+  # YAML, JSON, merge conflicts, large-file guard). Same as `just precommit`
+  # locally. continue-on-error removed — failures now actually fail the build.
+  # ---------------------------------------------------------------------------
   code-quality:
     name: Code quality
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
         with:
-          python-version: '3.11'
-      - name: Install linters
-        run: pip install black==24.10.0 flake8==7.1.1
-      - name: Check black formatting
-        run: black --check --diff ingestion/ transform/ tests/ airflow/dags/ scripts/
-        continue-on-error: true
-      - name: Run flake8
-        run: flake8 ingestion/ transform/ tests/ airflow/dags/ scripts/ --max-line-length=120 --extend-ignore=E203,W503
-        continue-on-error: true
+          enable-cache: true
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11.9
+
+      - name: Install dev dependencies (pre-commit lives in [dev])
+        run: uv sync --extra dev
+
+      - name: Cache pre-commit hook environments
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
+
+      - name: Run pre-commit on all files
+        run: uv run pre-commit run --all-files --show-diff-on-failure
